@@ -13,18 +13,18 @@ go get github.com/sxwebdev/xutils
 
 ## Packages
 
-| Package      | Description                                                                                                     |
-| ------------ | --------------------------------------------------------------------------------------------------------------- |
-| `broker`     | Generic thread-safe pub/sub message broker with goroutine-based broadcasting                                    |
-| `cacheutil`  | Cache interface for key-value storage with JSON and TTL support                                                 |
-| `dbutil`     | Pagination helper: calculates limit/offset from page and pageSize                                               |
-| `loggerutil` | Minimal logger interface with a no-op implementation                                                            |
-| `loopper`    | Periodic task runner with context timeout, panic recovery and manual trigger                                    |
-| `randutil`   | Cryptographically secure random string and number generation                                                    |
-| `retry`      | Retry mechanism with linear, backoff and infinite policies                                                      |
-| `strutil`    | String helpers: UTF-8 cleanup, null byte removal, number formatting, duration formatting                        |
-| `syncutil`   | Thread-safe generic containers: `Map`, `Slice`, and `Locker` (mutex-wrapped value)                              |
-| `testutil`   | Test helpers: pretty-print any value as indented JSON                                                           |
-| `timeutil`   | Function execution time measurement                                                                             |
-| `pipeline`   | Declarative resumable workflow engine with action/poll/branch steps, saga compensation and snapshot persistence |
-| `workflow`   | Stage-based workflow engine with steps, retry policies and lifecycle hooks                                      |
+| Package      | Description                                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `broker`     | Generic thread-safe pub/sub message broker with goroutine-based broadcasting                                                    |
+| `cacheutil`  | Cache interface for key-value storage with JSON and TTL support                                                                 |
+| `dbutil`     | Database helpers: pagination (limit/offset), JSON column type, duration column type, transaction wrapper, generic find response |
+| `loggerutil` | Minimal logger interface with a no-op implementation                                                                            |
+| `loopper`    | Periodic task runner with context timeout, panic recovery and manual trigger                                                    |
+| `randutil`   | Cryptographically secure random string and number generation                                                                    |
+| `retry`      | Retry mechanism with linear, backoff and infinite policies                                                                      |
+| `strutil`    | String helpers: UTF-8 cleanup, null byte removal, number formatting, duration formatting                                        |
+| `syncutil`   | Thread-safe generic containers: `Map`, `Slice`, and `Locker` (mutex-wrapped value)                                              |
+| `testutil`   | Test helpers: pretty-print any value as indented JSON                                                                           |
+| `timeutil`   | Function execution time measurement                                                                                             |
+| `pipeline`   | Declarative resumable workflow engine with action/poll/branch steps, saga compensation and snapshot persistence                 |
+| `workflow`   | Stage-based workflow engine with steps, retry policies and lifecycle hooks                                                      |

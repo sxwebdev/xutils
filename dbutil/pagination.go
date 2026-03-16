@@ -19,9 +19,7 @@ func WithMaxLimit(v uint32) PaginationOption {
 // Default max limit is 100; To disable max limit check, set it to 0 or a very large number using WithMaxLimit option.
 // If page is nil, it is treated as 1. If pageSize is nil, it is treated as 100.
 func Pagination(page, pageSize *uint32, opts ...PaginationOption) (limit, offset uint32, err error) {
-	options := paginationOptions{
-		MaxLimit: 100,
-	}
+	options := paginationOptions{}
 
 	for _, opt := range opts {
 		opt(&options)
