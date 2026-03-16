@@ -113,20 +113,20 @@ r := retry.New().
 
 ## Defaults
 
-| Option          | Default        |
-| --------------- | -------------- |
-| `MaxAttempts`   | 5              |
-| `Policy`        | `PolicyBackoff` |
-| `Delay`         | 1s             |
+| Option        | Default         |
+| ------------- | --------------- |
+| `MaxAttempts` | 5               |
+| `Policy`      | `PolicyBackoff` |
+| `Delay`       | 1s              |
 
 ## Options
 
-| Option           | Description                                   |
-| ---------------- | --------------------------------------------- |
-| `WithContext`    | Set context (required for `PolicyInfinite`)    |
-| `WithLogger`     | Set a structured logger                       |
-| `WithMaxAttempts` | Maximum number of attempts                   |
-| `WithPolicy`     | Retry strategy                                |
-| `WithDelay`      | Initial delay between attempts                |
-| `WithOnFailedFn` | Callback on each failed attempt               |
-| `WithOnSuccessFn` | Callback on success                          |
+| Option            | Description                                 |
+| ----------------- | ------------------------------------------- |
+| `WithContext`     | Set context (required for `PolicyInfinite`) |
+| `WithLogger`      | Set a structured logger                     |
+| `WithMaxAttempts` | Maximum number of attempts                  |
+| `WithPolicy`      | Retry strategy                              |
+| `WithDelay`       | Initial delay between attempts              |
+| `WithOnFailedFn`  | Callback on each failed attempt             |
+| `WithOnSuccessFn` | Callback on success                         |

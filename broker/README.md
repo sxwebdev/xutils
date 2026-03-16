@@ -55,10 +55,10 @@ msg2 := <-ch2 // "event"
 
 ## Buffering
 
-| Channel          | Buffer Size |
-| ---------------- | ----------- |
-| Publish (internal) | 16        |
-| Subscriber         | 8         |
+| Channel            | Buffer Size |
+| ------------------ | ----------- |
+| Publish (internal) | 16          |
+| Subscriber         | 8           |
 
 If a subscriber's buffer is full, the message is dropped for that subscriber. Other subscribers are not affected.
 
@@ -76,6 +76,6 @@ b.Publish("ignored") // no effect
 
 ## Options
 
-| Option       | Description                        |
-| ------------ | ---------------------------------- |
+| Option       | Description                          |
+| ------------ | ------------------------------------ |
 | `WithLogger` | Set a structured logger for warnings |

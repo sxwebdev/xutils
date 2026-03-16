@@ -37,15 +37,15 @@ s.AddToIndex(0, 42)
 
 ### Slice API
 
-| Method                    | Description                 |
-| ------------------------- | --------------------------- |
-| `NewSlice[T]()`           | Create empty slice          |
-| `NewSliceWithLength[T](n)` | Create with capacity `n`  |
-| `Add(item)`               | Append a single item        |
-| `AddToIndex(i, item)`     | Set item at index           |
-| `AddMany(items)`          | Append multiple items       |
-| `GetAll()`                | Return all items            |
-| `Len()`                   | Return size                 |
+| Method                     | Description              |
+| -------------------------- | ------------------------ |
+| `NewSlice[T]()`            | Create empty slice       |
+| `NewSliceWithLength[T](n)` | Create with capacity `n` |
+| `Add(item)`                | Append a single item     |
+| `AddToIndex(i, item)`      | Set item at index        |
+| `AddMany(items)`           | Append multiple items    |
+| `GetAll()`                 | Return all items         |
+| `Len()`                    | Return size              |
 
 ## Map
 
@@ -112,10 +112,10 @@ l.Update(func(c *Config) {
 
 ### Locker API
 
-| Method          | Description                              |
-| --------------- | ---------------------------------------- |
-| `NewLocker(v)`  | Create with initial value                |
-| `Set(value)`    | Replace value                            |
-| `Get()`         | Read a copy of the value                 |
-| `GetPointer()`  | Get pointer to the value                 |
-| `Update(fn)`    | Modify value in place under lock         |
+| Method         | Description                      |
+| -------------- | -------------------------------- |
+| `NewLocker(v)` | Create with initial value        |
+| `Set(value)`   | Replace value                    |
+| `Get()`        | Read a copy of the value         |
+| `GetPointer()` | Get pointer to the value         |
+| `Update(fn)`   | Modify value in place under lock |

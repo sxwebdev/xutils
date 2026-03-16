@@ -67,17 +67,17 @@ l.Wait()  // wait for current execution to finish
 
 ## Defaults
 
-| Option             | Default |
-| ------------------ | ------- |
-| `WithPeriod`       | 60s     |
-| `WithContextTimeout` | 30s  |
-| `WithLeading`      | false   |
+| Option               | Default |
+| -------------------- | ------- |
+| `WithPeriod`         | 60s     |
+| `WithContextTimeout` | 30s     |
+| `WithLeading`        | false   |
 
 ## Options
 
-| Option               | Description                                    |
-| -------------------- | ---------------------------------------------- |
-| `WithPeriod`         | Tick interval between executions               |
-| `WithContextTimeout` | Per-execution context deadline                 |
-| `WithLeading`        | Execute immediately on Start                   |
-| `WithLogger`         | Set a structured logger for debug output       |
+| Option               | Description                              |
+| -------------------- | ---------------------------------------- |
+| `WithPeriod`         | Tick interval between executions         |
+| `WithContextTimeout` | Per-execution context deadline           |
+| `WithLeading`        | Execute immediately on Start             |
+| `WithLogger`         | Set a structured logger for debug output |
