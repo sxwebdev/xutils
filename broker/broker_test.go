@@ -109,22 +109,20 @@ func TestBroker_Stop(t *testing.T) {
 	timer := time.NewTimer(100 * time.Millisecond)
 	defer timer.Stop()
 
+loop:
 	for {
 		select {
 		case _, ok := <-subCh2:
 			if !ok {
 				// Channel is indeed closed
 				closedOk = true
-				break
+				break loop
 			}
 			// If ok == true, it means there is leftover data in the buffer
 			// Continue reading until closure
 		case <-timer.C:
 			t.Error("subCh2 did not close within a reasonable time after Stop() (or there is unread data)")
 			return
-		}
-		if closedOk {
-			break
 		}
 	}
 
