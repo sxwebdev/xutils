@@ -2,42 +2,42 @@ package syncutil
 
 import "sync"
 
-// Locker — обёртка для любого типа с мьютексом (хранит указатель на значение).
+// Locker is a mutex-protected wrapper for any type (stores a pointer to the value).
 type Locker[T any] struct {
 	mu    sync.Mutex
-	value *T // Всегда храним указатель
+	value *T
 }
 
-// NewLocker создаёт новую защищённую структуру.
+// NewLocker creates a new mutex-protected value.
 func NewLocker[T any](value T) *Locker[T] {
-	return &Locker[T]{value: &value} // Сохраняем указатель на переданное значение
+	return &Locker[T]{value: &value}
 }
 
-// Set заменяет значение полностью (атомарно).
+// Set replaces the value atomically.
 func (l *Locker[T]) Set(value T) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.value = &value
 }
 
-// Update безопасно изменяет значение "на месте".
-// Функция `fn` получает указатель и может менять значение без возврата.
+// Update safely modifies the value in-place.
+// The function fn receives a pointer and can modify the value directly.
 func (l *Locker[T]) Update(fn func(value *T)) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fn(l.value) // Передаём указатель, изменения сохраняются напрямую
+	fn(l.value)
 }
 
-// Get безопасно возвращает копию текущего значения.
+// Get safely returns a copy of the current value.
 func (l *Locker[T]) Get() T {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return *l.value // Разыменовываем указатель
+	return *l.value
 }
 
-// GetPointer безопасно возвращает указатель на текущее значение.
+// GetPointer safely returns a pointer to the current value.
 func (l *Locker[T]) GetPointer() *T {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.value // Возвращаем указатель
+	return l.value
 }

@@ -1,9 +1,10 @@
 package broker
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"github.com/sxwebdev/xutils/loggerutil"
 )
 
 // Broker - a thread-safe broker for subscribers.
@@ -28,15 +29,32 @@ type Broker[T any] struct {
 
 	// closed - a flag indicating that the broker is stopped (to prevent new subscriptions after Stop).
 	closed atomic.Bool
+
+	// logger is an optional logger for diagnostic messages.
+	logger loggerutil.Logger
+}
+
+// BrokerOption configures a Broker.
+type BrokerOption[T any] func(*Broker[T])
+
+// WithLogger sets the logger for the broker.
+func WithLogger[T any](l loggerutil.Logger) BrokerOption[T] {
+	return func(b *Broker[T]) {
+		b.logger = l
+	}
 }
 
 // NewBroker initializes the broker but does NOT start its goroutine.
-func NewBroker[T any]() *Broker[T] {
-	return &Broker[T]{
+func NewBroker[T any](opts ...BrokerOption[T]) *Broker[T] {
+	b := &Broker[T]{
 		publishCh: make(chan T, 16), // can increase the buffer size if needed
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
 	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Start starts the broker's goroutine: it reads from publishCh and distributes messages.
@@ -87,9 +105,7 @@ func (b *Broker[T]) Subscribe() chan T {
 
 // Unsubscribe removes a channel from the list and closes it (if present).
 func (b *Broker[T]) Unsubscribe(ch chan T) {
-	// Attempt to remove the subscription (if not already removed)
-	if _, ok := b.subs.Load(ch); ok {
-		b.subs.Delete(ch)
+	if _, ok := b.subs.LoadAndDelete(ch); ok {
 		close(ch)
 	}
 }
@@ -112,7 +128,7 @@ func (b *Broker[T]) Publish(msg T) {
 func (b *Broker[T]) broadcast(msg T) {
 	b.subs.Range(func(key, _ any) bool {
 		ch := key.(chan T) //nolint:forcetypeassert
-		safeSend(ch, msg, func(ch chan T) {
+		safeSend(ch, msg, b.logger, func(ch chan T) {
 			// If the send causes a panic (channel is closed),
 			// remove it from the list of subscribers.
 			b.subs.Delete(ch)
@@ -133,11 +149,13 @@ func (b *Broker[T]) closeAllSubscribers() {
 
 // safeSend performs a non-blocking send to a channel with panic recovery.
 // removeOnPanic is called if the channel is found to be closed (panic on send).
-func safeSend[T any](ch chan T, msg T, removeOnPanic func(ch chan T)) {
+func safeSend[T any](ch chan T, msg T, logger loggerutil.Logger, removeOnPanic func(ch chan T)) {
 	defer func() {
 		if r := recover(); r != nil {
 			// The channel is likely closed by the subscriber
-			fmt.Printf("subscriber channel is closed, removing from subs (panic: %v)\n", r) //nolint:forbidigo
+			if logger != nil {
+				logger.Warnf("subscriber channel is closed, removing from subs (panic: %v)", r)
+			}
 			removeOnPanic(ch)
 		}
 	}()

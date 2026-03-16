@@ -16,13 +16,13 @@ func GenerateRandomString(n int, alphabet string) (string, error) {
 	if alphabet == "" {
 		alphabet = defaultAlphabet
 	}
-	// rejection sampling: берём байты до ближайшего кратного len(alphabet)
+	// rejection sampling: take bytes up to the nearest multiple of len(alphabet)
 	alLen := byte(len(alphabet))
 	maxrb := byte(255 - (256 % int(alLen)))
 
 	out := make([]byte, n)
 	i := 0
-	buf := make([]byte, 64) // читаем пачками для эффективности
+	buf := make([]byte, 64) // read in batches for efficiency
 
 	for i < n {
 		if _, err := rand.Read(buf); err != nil {
@@ -30,7 +30,7 @@ func GenerateRandomString(n int, alphabet string) (string, error) {
 		}
 		for _, rb := range buf {
 			if rb > maxrb {
-				continue // отбросить, чтобы не было смещения
+				continue // discard to avoid modulo bias
 			}
 			out[i] = alphabet[int(rb)%int(alLen)]
 			i++

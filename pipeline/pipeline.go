@@ -145,7 +145,8 @@ func (d *dataStore) All() map[string]any {
 }
 
 // marshalData serializes the data store for persistence.
-func (d *dataStore) marshalData() map[string]json.RawMessage {
+// Returns an error if any value fails to marshal.
+func (d *dataStore) marshalData() (map[string]json.RawMessage, error) {
 	result := make(map[string]json.RawMessage, len(d.data))
 	for k, v := range d.data {
 		// If already RawMessage, keep as-is.
@@ -155,11 +156,11 @@ func (d *dataStore) marshalData() map[string]json.RawMessage {
 		}
 		b, err := json.Marshal(v)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("pipeline: failed to marshal data key %q: %w", k, err)
 		}
 		result[k] = b
 	}
-	return result
+	return result, nil
 }
 
 // restoreData loads data from persisted JSON.

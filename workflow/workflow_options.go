@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"time"
 
 	"github.com/sxwebdev/xutils/loggerutil"
 )
@@ -87,5 +88,13 @@ func WithCompensationStage(stageRef StageRef, stepRef StepRef) WorkflowOption {
 	return func(w *Workflow) {
 		w.compensationStageRef = &stageRef
 		w.compensationStepRef = &stepRef
+	}
+}
+
+// WithShutdownTimeout sets the maximum time to wait for a graceful shutdown
+// after context cancellation. Default is 9 seconds.
+func WithShutdownTimeout(d time.Duration) WorkflowOption {
+	return func(w *Workflow) {
+		w.shutdownTimeout = d
 	}
 }

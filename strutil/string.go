@@ -11,7 +11,8 @@ import (
 func ClearUTF8String(s string) string {
 	b := bytes.ReplaceAll([]byte(s), []byte{0}, []byte{})
 
-	result := make([]byte, 0, len(b))
+	var result strings.Builder
+	result.Grow(len(b))
 
 	lastWasSpace := true
 
@@ -19,18 +20,18 @@ func ClearUTF8String(s string) string {
 		r, size := utf8.DecodeRune(b)
 		if r == utf8.RuneError && size == 1 { //nolint:nestif
 			if !lastWasSpace {
-				result = append(result, ' ')
+				result.WriteByte(' ')
 				lastWasSpace = true
 			}
 			b = b[1:]
 		} else {
 			if r == ' ' {
 				if !lastWasSpace {
-					result = append(result, ' ')
+					result.WriteByte(' ')
 					lastWasSpace = true
 				}
 			} else {
-				result = append(result, b[:size]...)
+				result.Write(b[:size])
 				lastWasSpace = false
 			}
 			b = b[size:]
@@ -44,7 +45,7 @@ func ClearUTF8String(s string) string {
 		return -1
 	}
 
-	return strings.Map(filter, strings.TrimSpace(string(result)))
+	return strings.Map(filter, strings.TrimSpace(result.String()))
 }
 
 // RemoveNullBytes removes null bytes from a string.

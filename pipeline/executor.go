@@ -79,7 +79,12 @@ func (e *Executor) Run(ctx context.Context, p *Pipeline, state RunState) (RunSta
 	// All steps completed successfully.
 	if state.Status == RunStatusRunning {
 		state.Status = RunStatusCompleted
-		state.Data = ds.marshalData()
+
+		data, marshalErr := ds.marshalData()
+		if marshalErr != nil {
+			return state, marshalErr
+		}
+		state.Data = data
 
 		if snapshotErr := e.snapshot(ctx, state); snapshotErr != nil {
 			e.Errorf("pipeline %q: snapshot on completion: %v", p.Name, snapshotErr)
@@ -111,7 +116,11 @@ func (e *Executor) executeSteps(
 
 		// Check context cancellation.
 		if ctx.Err() != nil {
-			state.Data = ds.marshalData()
+			data, marshalErr := ds.marshalData()
+			if marshalErr != nil {
+				return state, marshalErr
+			}
+			state.Data = data
 			state.CurrentPath = stepPath
 			return state, ctx.Err()
 		}
@@ -137,7 +146,11 @@ func (e *Executor) executeSteps(
 			// Check if error should skip compensation (retryable error).
 			if errors.Is(err, ErrNoCompensate) {
 				e.Warnf("pipeline %q: step %q failed (no compensate): %v", p.Name, step.Name, err)
-				state.Data = ds.marshalData()
+				data, marshalErr := ds.marshalData()
+				if marshalErr != nil {
+					return state, marshalErr
+				}
+				state.Data = data
 				state.FailedStepPath = stepPath
 
 				if snapshotErr := e.snapshot(ctx, state); snapshotErr != nil {
@@ -153,7 +166,12 @@ func (e *Executor) executeSteps(
 			state.FailedStepPath = stepPath
 			state.Status = RunStatusCompensating
 			state.CompensationIndex = len(state.CompletedSteps) - 1
-			state.Data = ds.marshalData()
+
+			data, marshalErr := ds.marshalData()
+			if marshalErr != nil {
+				return state, marshalErr
+			}
+			state.Data = data
 
 			if snapshotErr := e.snapshot(ctx, state); snapshotErr != nil {
 				e.Errorf("pipeline %q: snapshot on failure: %v", p.Name, snapshotErr)
@@ -219,7 +237,11 @@ func (e *Executor) executeAction(
 		HasCompensator: step.Action.Compensate != nil,
 	})
 
-	state.Data = ds.marshalData()
+	data, marshalErr := ds.marshalData()
+	if marshalErr != nil {
+		return state, marshalErr
+	}
+	state.Data = data
 	e.Infof("step %q completed", step.Name)
 
 	if err := e.snapshot(ctx, state); err != nil {
@@ -268,7 +290,12 @@ func (e *Executor) executePoll(
 	if !done {
 		// Save state and return snooze.
 		state.Status = RunStatusPolling
-		state.Data = ds.marshalData()
+
+		data, marshalErr := ds.marshalData()
+		if marshalErr != nil {
+			return state, marshalErr
+		}
+		state.Data = data
 
 		if err := e.snapshot(ctx, state); err != nil {
 			e.Errorf("pipeline %q: snapshot on poll snooze: %v", p.Name, err)
@@ -286,7 +313,11 @@ func (e *Executor) executePoll(
 		HasCompensator: false,
 	})
 
-	state.Data = ds.marshalData()
+	data, marshalErr := ds.marshalData()
+	if marshalErr != nil {
+		return state, marshalErr
+	}
+	state.Data = data
 	e.Infof("poll step %q completed", step.Name)
 
 	if err := e.snapshot(ctx, state); err != nil {
@@ -408,7 +439,12 @@ func (e *Executor) runCompensation(
 
 		if err := step.Action.Compensate(ctx, ds); err != nil {
 			state.CompensationIndex = i
-			state.Data = ds.marshalData()
+
+			data, marshalErr := ds.marshalData()
+			if marshalErr != nil {
+				return state, marshalErr
+			}
+			state.Data = data
 
 			if err := e.snapshot(ctx, state); err != nil {
 				e.Errorf("pipeline %q: snapshot on compensation failure: %v", p.Name, err)
@@ -422,7 +458,12 @@ func (e *Executor) runCompensation(
 
 		// Mark this compensator as done by updating the index.
 		state.CompensationIndex = i - 1
-		state.Data = ds.marshalData()
+
+		data, marshalErr := ds.marshalData()
+		if marshalErr != nil {
+			return state, marshalErr
+		}
+		state.Data = data
 
 		if err := e.snapshot(ctx, state); err != nil {
 			e.Errorf("pipeline %q: snapshot after compensation step: %v", p.Name, err)
@@ -434,7 +475,12 @@ func (e *Executor) runCompensation(
 	// All compensation done.
 	state.Status = RunStatusFailed
 	state.CompensationIndex = 0
-	state.Data = ds.marshalData()
+
+	data, marshalErr := ds.marshalData()
+	if marshalErr != nil {
+		return state, marshalErr
+	}
+	state.Data = data
 
 	if err := e.snapshot(ctx, state); err != nil {
 		e.Errorf("pipeline %q: snapshot after compensation complete: %v", p.Name, err)

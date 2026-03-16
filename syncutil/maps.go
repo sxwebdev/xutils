@@ -66,9 +66,11 @@ func (m *Map[K, V]) Keys() []K {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	keys := make([]K, 0, len(m.items))
+	keys := make([]K, len(m.items))
+	i := 0
 	for k := range m.items {
-		keys = append(keys, k)
+		keys[i] = k
+		i++
 	}
 	return keys
 }
@@ -77,11 +79,27 @@ func (m *Map[K, V]) Values() []V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	values := make([]V, 0, len(m.items))
+	values := make([]V, len(m.items))
+	i := 0
 	for _, v := range m.items {
-		values = append(values, v)
+		values[i] = v
+		i++
 	}
 	return values
+}
+
+// Range calls fn for each key-value pair in the map.
+// If fn returns false, iteration stops.
+// The map is read-locked for the duration of the iteration.
+func (m *Map[K, V]) Range(fn func(key K, value V) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for k, v := range m.items {
+		if !fn(k, v) {
+			break
+		}
+	}
 }
 
 func (m *Map[K, V]) Len() int {

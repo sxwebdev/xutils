@@ -107,7 +107,7 @@ func (r *Retry) backoffRetry(fn func() error) error {
 		}
 
 		if attempt < r.maxAttempts {
-			delay := r.delay * (1 << (attempt - 1)) // Увеличение задержки в 2 раза на каждую попытку
+			delay := r.delay * (1 << (attempt - 1)) // double the delay on each attempt
 			if r.logger != nil {
 				r.logger.Infof("backoff retry attempt %d failed, retrying in %s...", attempt, delay)
 			}
@@ -128,6 +128,7 @@ func (r *Retry) infiniteRetry(fn func() error) error {
 		for {
 			select {
 			case <-r.ctx.Done():
+				resCh <- r.ctx.Err()
 				return
 			default:
 				err := fn()

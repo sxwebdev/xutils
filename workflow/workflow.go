@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,11 +44,14 @@ type Workflow struct {
 
 	logger loggerutil.Logger
 
-	isStopped atomic.Bool
-	prevStep  *Step
+	isStopped       atomic.Bool
+	prevStep        *Step
+	shutdownTimeout time.Duration
 
 	isSkipError bool
 
+	// varsMu protects the vars map.
+	varsMu sync.RWMutex
 	// vars is a shared data store for passing data between steps.
 	vars map[string]any
 
@@ -123,8 +127,13 @@ func (w *Workflow) Run(ctx context.Context) (err error) {
 		w.isStopped.Store(true)
 	}
 
+	shutdownTimeout := w.shutdownTimeout
+	if shutdownTimeout == 0 {
+		shutdownTimeout = 10 * time.Second
+	}
+
 	select {
-	case <-time.After(9 * time.Second):
+	case <-time.After(shutdownTimeout):
 		return fmt.Errorf("workflow shutdown execution timeout")
 	case err := <-errCh:
 		return err
@@ -219,6 +228,14 @@ func (w *Workflow) init() error {
 			}
 
 			step.setDefaultValues()
+
+			if step.Func == nil {
+				return fmt.Errorf("step [%s] in stage [%s] has no function", step.Name, stage.Name)
+			}
+
+			if step.RetryPolicy == nil {
+				return fmt.Errorf("step [%s] in stage [%s] has no retry policy", step.Name, stage.Name)
+			}
 
 			// set current stage and step
 			step.State.SetCurrentStage(stage.Name)
@@ -384,14 +401,6 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 		if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
 			w.Errorf("snapshot before step: %s", snapshotErr)
 		}
-	}
-
-	if step.Func == nil {
-		return fmt.Errorf("step [%s] in stage [%s] has no function", step.Name, stage.Name)
-	}
-
-	if step.RetryPolicy == nil {
-		return fmt.Errorf("step [%s] in stage [%s] has no retry policy", step.Name, stage.Name)
 	}
 
 	// build step context
