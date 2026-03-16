@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-type RetryPolicyFn func(context.Context, *Workflow, *Stage, *Step) error
+// RetryPolicyFn defines the function signature for a retry policy.
+type RetryPolicyFn func(sc *StepContext) error
 
 // isControlFlowError returns true if the error is a sentinel control flow error
 // that should not be retried.
@@ -28,11 +29,11 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 }
 
 // RunWithLinear runs a step function with a simple linear retry mechanism.
-func RunWithLinear(ctx context.Context, w *Workflow, stage *Stage, step *Step) error {
+func RunWithLinear(sc *StepContext) error {
 	var err error
 
-	for retries := 0; retries < step.MaxRetries || step.MaxRetries < 0; retries++ {
-		err = step.Func(ctx, w, stage, step)
+	for retries := 0; retries < sc.Step.MaxRetries || sc.Step.MaxRetries < 0; retries++ {
+		err = sc.Step.Func(sc)
 		if err == nil {
 			return nil
 		}
@@ -42,13 +43,13 @@ func RunWithLinear(ctx context.Context, w *Workflow, stage *Stage, step *Step) e
 			return err
 		}
 
-		if !errors.Is(err, ErrNoConsole) {
-			w.Errorf("step [%s] failed with error: %s", step.Name, err)
+		if !errors.Is(err, ErrSilent) {
+			sc.Workflow.Errorf("step [%s] failed with error: %s", sc.Step.Name, err)
 		}
 
-		if retries+1 < step.MaxRetries || step.MaxRetries < 0 {
-			w.Errorf("retrying in %s", step.Timeout)
-			if err := sleepWithContext(ctx, step.Timeout); err != nil {
+		if retries+1 < sc.Step.MaxRetries || sc.Step.MaxRetries < 0 {
+			sc.Workflow.Errorf("retrying in %s", sc.Step.Timeout)
+			if err := sleepWithContext(sc, sc.Step.Timeout); err != nil {
 				return err
 			}
 		}
@@ -58,12 +59,12 @@ func RunWithLinear(ctx context.Context, w *Workflow, stage *Stage, step *Step) e
 }
 
 // RunWithBackoff runs a step function with a simple backoff retry mechanism.
-func RunWithBackoff(ctx context.Context, w *Workflow, stage *Stage, step *Step) error {
+func RunWithBackoff(sc *StepContext) error {
 	var err error
 
 	backoff := 1 * time.Second
-	for retries := 0; retries < step.MaxRetries || step.MaxRetries < 0; retries++ {
-		err = step.Func(ctx, w, stage, step)
+	for retries := 0; retries < sc.Step.MaxRetries || sc.Step.MaxRetries < 0; retries++ {
+		err = sc.Step.Func(sc)
 		if err == nil {
 			return nil
 		}
@@ -73,13 +74,13 @@ func RunWithBackoff(ctx context.Context, w *Workflow, stage *Stage, step *Step) 
 			return err
 		}
 
-		if !errors.Is(err, ErrNoConsole) {
-			w.Errorf("step [%s] failed with error: %s", step.Name, err)
+		if !errors.Is(err, ErrSilent) {
+			sc.Workflow.Errorf("step [%s] failed with error: %s", sc.Step.Name, err)
 		}
 
-		if retries+1 < step.MaxRetries || step.MaxRetries < 0 {
-			w.Errorf("retrying in %s", backoff)
-			if err := sleepWithContext(ctx, backoff); err != nil {
+		if retries+1 < sc.Step.MaxRetries || sc.Step.MaxRetries < 0 {
+			sc.Workflow.Errorf("retrying in %s", backoff)
+			if err := sleepWithContext(sc, backoff); err != nil {
 				return err
 			}
 			backoff *= 2

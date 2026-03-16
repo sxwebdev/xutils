@@ -50,7 +50,7 @@ func (w *Workflow) SetBeforeFn(fn func(context.Context, *Workflow) error) *Workf
 	return w
 }
 
-// SetBeforeAllStepsFn sets the before start function for the workflow.
+// SetBeforeAllStepsFn sets the before all steps function for the workflow.
 func (w *Workflow) SetBeforeAllStepsFn(fn func(context.Context, *Workflow, *Stage, *Step) error) *Workflow {
 	w.BeforeAllStepsFn = fn
 	return w
@@ -68,9 +68,15 @@ func (w *Workflow) SetOnFailureFn(fn func(context.Context, *Workflow, error) err
 	return w
 }
 
-// SetSkipError
+// SetSkipError sets the skip error flag.
 func (w *Workflow) SetSkipError(skip bool) *Workflow {
 	w.isSkipError = skip
+	return w
+}
+
+// SetSnapshotFn sets the snapshot persistence function.
+func (w *Workflow) SetSnapshotFn(fn func(ctx context.Context, w *Workflow, snapshot Snapshot) error) *Workflow {
+	w.SnapshotFn = fn
 	return w
 }
 
@@ -83,7 +89,7 @@ func (w *Workflow) SetSkipError(skip bool) *Workflow {
 // Logger returns the logger for the workflow.
 func (w *Workflow) Logger() loggerutil.Logger { return w.logger }
 
-// Step states
+// StepStates returns all step states with valid statuses.
 func (w *Workflow) StepStates() []*StepState {
 	states := []*StepState{}
 	for _, stage := range w.Stages {
@@ -96,20 +102,18 @@ func (w *Workflow) StepStates() []*StepState {
 	return states
 }
 
-// GetSnapshot
+// GetSnapshot returns a snapshot of the current workflow state.
 func (w *Workflow) GetSnapshot() Snapshot {
 	return Snapshot{
 		StepsStates:   w.StepStates(),
 		WorkflowState: w.State,
+		Vars:          w.vars,
 	}
 }
 
-// GetSnapshot
+// GetJSONSnapshot returns a JSON string of the current workflow state.
 func (w *Workflow) GetJSONSnapshot() string {
-	sh := Snapshot{
-		StepsStates:   w.StepStates(),
-		WorkflowState: w.State,
-	}
+	sh := w.GetSnapshot()
 
 	var b []byte
 	if w.Debug {
@@ -121,7 +125,7 @@ func (w *Workflow) GetJSONSnapshot() string {
 	return string(b)
 }
 
-// SetSnapshot
+// SetSnapshot restores workflow state from a Snapshot.
 func (w *Workflow) SetSnapshot(snapshot Snapshot) error {
 	for _, state := range snapshot.StepsStates {
 		for _, stage := range w.Stages {
@@ -135,6 +139,7 @@ func (w *Workflow) SetSnapshot(snapshot Snapshot) error {
 	}
 
 	w.State = snapshot.WorkflowState
+	w.vars = snapshot.Vars
 
 	return nil
 }

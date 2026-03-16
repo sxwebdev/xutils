@@ -70,14 +70,14 @@ func (w *WorkflowState) SetError(err error) *WorkflowState {
 	return w
 }
 
-// SetNextStage sets the next stage for the workflow.
-func (w *WorkflowState) SetNextStage(stage string) *WorkflowState {
-	w.NextStage = stage
+// GoToStage sets the next stage using a typed reference.
+func (w *WorkflowState) GoToStage(ref StageRef) *WorkflowState {
+	w.NextStage = ref.name
 	return w
 }
 
-// SetNextStep sets the next step for the workflow.
-func (w *WorkflowState) SetNextStep(step string) *WorkflowState {
-	w.NextStep = step
+// GoToStep sets the next step using a typed reference.
+func (w *WorkflowState) GoToStep(ref StepRef) *WorkflowState {
+	w.NextStep = ref.name
 	return w
 }

@@ -2,6 +2,12 @@ package workflow
 
 import "context"
 
+// StageRef is a typed reference to a stage, used for compile-time safe navigation.
+type StageRef struct{ name string }
+
+// Name returns the stage name.
+func (r StageRef) Name() string { return r.name }
+
 // Stage represents a unique stage that can contain multiple steps.
 type Stage struct {
 	// Name is the name of the stage.
@@ -14,8 +20,8 @@ type Stage struct {
 	AfterFn func(context.Context, *Stage) error
 }
 
-// NewStage returns a new stage.
-func NewStage(name string, opts ...StageOption) *Stage {
+// NewStage returns a new stage and its typed reference.
+func NewStage(name string, opts ...StageOption) (*Stage, StageRef) {
 	s := &Stage{
 		Name: name,
 	}
@@ -24,5 +30,5 @@ func NewStage(name string, opts ...StageOption) *Stage {
 		opt(s)
 	}
 
-	return s
+	return s, StageRef{name: name}
 }

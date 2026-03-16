@@ -25,10 +25,18 @@ type Workflow struct {
 	// OnFailureFn is the on failure function for the workflow.
 	OnFailureFn func(context.Context, *Workflow, error) error
 
-	// BeforeAllStagesFn is the before all steps function for the workflow.
+	// BeforeAllStepsFn is the before all steps function for the workflow.
 	BeforeAllStepsFn func(context.Context, *Workflow, *Stage, *Step) error
-	// AfterAllStagesFn is the after all steps function for the workflow.
+	// AfterAllStepsFn is the after all steps function for the workflow.
 	AfterAllStepsFn func(context.Context, *Workflow, *Stage, *Step) error
+
+	// SnapshotFn is called automatically before and after each step,
+	// and on failure, to persist workflow state.
+	SnapshotFn func(ctx context.Context, w *Workflow, snapshot Snapshot) error
+
+	// CompensationStage configures automatic routing to a compensation stage on failure.
+	compensationStageRef *StageRef
+	compensationStepRef  *StepRef
 
 	// Debug allows to enable debug mode.
 	Debug bool
@@ -39,6 +47,13 @@ type Workflow struct {
 	prevStep  *Step
 
 	isSkipError bool
+
+	// vars is a shared data store for passing data between steps.
+	vars map[string]any
+
+	// indices built during init() for fast lookups.
+	stageIndex map[string]*Stage
+	stepIndex  map[string]*Step
 }
 
 func New(opts ...WorkflowOption) *Workflow {
@@ -58,6 +73,14 @@ func (w *Workflow) Run(ctx context.Context) (err error) {
 			return
 		}
 
+		// save snapshot on failure
+		if w.SnapshotFn != nil {
+			if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
+				w.Errorf("snapshot on failure: %s", snapshotErr)
+			}
+		}
+
+		// call user's OnFailureFn first (for custom error serialization, etc.)
 		if w.OnFailureFn != nil {
 			failureErr := w.OnFailureFn(ctx, w, err)
 			if failureErr != nil {
@@ -65,10 +88,26 @@ func (w *Workflow) Run(ctx context.Context) (err error) {
 					w.Errorf("workflow on failure: %s", failureErr)
 				}
 			}
+		}
 
-			if w.isSkipError {
-				err = nil
+		// apply automatic compensation if configured
+		if w.compensationStageRef != nil && w.compensationStepRef != nil {
+			w.State.SetError(err)
+			w.State.GoToStage(*w.compensationStageRef)
+			w.State.GoToStep(*w.compensationStepRef)
+
+			// save snapshot after compensation navigation
+			if w.SnapshotFn != nil {
+				if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
+					w.Errorf("snapshot after compensation: %s", snapshotErr)
+				}
 			}
+
+			w.isSkipError = true
+		}
+
+		if w.isSkipError {
+			err = nil
 		}
 	}()
 
@@ -151,28 +190,29 @@ func (w *Workflow) execute(ctx context.Context) (err error) {
 }
 
 func (w *Workflow) init() error {
-	// check stages for unique names
-	uniqueStages := make(map[string]struct{})
+	// build indices and check for unique names
+	w.stageIndex = make(map[string]*Stage, len(w.Stages))
+	w.stepIndex = make(map[string]*Step)
+
 	for stageIdx, stage := range w.Stages {
 		if stage == nil {
 			return fmt.Errorf("stage at index [%d] is nil", stageIdx)
 		}
 
-		if _, ok := uniqueStages[stage.Name]; ok {
+		if _, ok := w.stageIndex[stage.Name]; ok {
 			return fmt.Errorf("stage [%s] is not unique", stage.Name)
 		}
-		uniqueStages[stage.Name] = struct{}{}
+		w.stageIndex[stage.Name] = stage
 
-		uniqueSteps := make(map[string]struct{})
 		for stepIdx, step := range stage.Steps {
 			if step == nil {
 				return fmt.Errorf("step at index [%d] in stage [%s] is nil", stepIdx, stage.Name)
 			}
 
-			if _, ok := uniqueSteps[step.Name]; ok {
-				return fmt.Errorf("step [%s] is not unique in stage [%s]", step.Name, stage.Name)
+			if _, ok := w.stepIndex[step.Name]; ok {
+				return fmt.Errorf("step [%s] is not unique (in stage [%s])", step.Name, stage.Name)
 			}
-			uniqueSteps[step.Name] = struct{}{}
+			w.stepIndex[step.Name] = step
 
 			if step.State == nil {
 				step.State = NewStepState()
@@ -183,6 +223,18 @@ func (w *Workflow) init() error {
 			// set current stage and step
 			step.State.SetCurrentStage(stage.Name)
 			step.State.SetCurrentStep(step.Name)
+		}
+	}
+
+	// validate compensation refs
+	if w.compensationStageRef != nil {
+		if _, ok := w.stageIndex[w.compensationStageRef.name]; !ok {
+			return fmt.Errorf("compensation stage [%s] not found", w.compensationStageRef.name)
+		}
+	}
+	if w.compensationStepRef != nil {
+		if _, ok := w.stepIndex[w.compensationStepRef.name]; !ok {
+			return fmt.Errorf("compensation step [%s] not found", w.compensationStepRef.name)
 		}
 	}
 
@@ -208,7 +260,7 @@ func (w *Workflow) handleStage(ctx context.Context, stage *Stage) error {
 			w.Debugf("skipping stage: %s (next stage)", stage.Name)
 			return ErrSkipStage
 		}
-		w.State.SetNextStage("")
+		w.State.NextStage = ""
 	}
 
 	if len(stage.Steps) == 0 {
@@ -257,7 +309,7 @@ func (w *Workflow) handleStage(ctx context.Context, stage *Stage) error {
 func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (err error) {
 	nextStepName := w.State.NextStep
 	if nextStepName != "" && nextStepName == step.Name {
-		w.State.SetNextStep("")
+		w.State.NextStep = ""
 	}
 
 	w.Debugf("executing step: %s / %s", stage.Name, step.Name)
@@ -279,7 +331,6 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 
 	if step.State.Status == StepStatusSuspended {
 		w.Debugf("skipping step: %s (suspended)", step.Name)
-		// Not sure if this is the correct return value
 		return ErrBreakStages
 	}
 
@@ -289,7 +340,7 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 			step.State.SetStatus(StepStatusSkipped)
 			return ErrSkipStep
 		}
-		w.State.SetNextStep("")
+		w.State.NextStep = ""
 	}
 
 	step.State.SetStartTime(time.Now())
@@ -308,6 +359,13 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 				step.State.SetError(err)
 			}
 		}
+
+		// save snapshot after step completes (success or failure)
+		if w.SnapshotFn != nil {
+			if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
+				w.Errorf("snapshot after step: %s", snapshotErr)
+			}
+		}
 	}()
 
 	step.State.SetStatus(StepStatusPending)
@@ -321,12 +379,27 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 
 	step.State.SetStatus(StepStatusProcessing)
 
+	// save snapshot before step execution
+	if w.SnapshotFn != nil {
+		if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
+			w.Errorf("snapshot before step: %s", snapshotErr)
+		}
+	}
+
 	if step.Func == nil {
 		return fmt.Errorf("step [%s] in stage [%s] has no function", step.Name, stage.Name)
 	}
 
 	if step.RetryPolicy == nil {
 		return fmt.Errorf("step [%s] in stage [%s] has no retry policy", step.Name, stage.Name)
+	}
+
+	// build step context
+	sc := &StepContext{
+		Context:  ctx,
+		Workflow: w,
+		Stage:    stage,
+		Step:     step,
 	}
 
 	// run before all steps function
@@ -343,8 +416,8 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 		}
 	}
 
-	// run step function
-	err = step.RetryPolicy(ctx, w, stage, step)
+	// run step function via retry policy
+	err = step.RetryPolicy(sc)
 
 	// run after function
 	if step.AfterFn != nil {

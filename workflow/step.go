@@ -5,8 +5,22 @@ import (
 	"time"
 )
 
+// StepRef is a typed reference to a step, used for compile-time safe navigation.
+type StepRef struct{ name string }
+
+// Name returns the step name.
+func (r StepRef) Name() string { return r.name }
+
+// StepContext provides all step execution context in a single struct.
+type StepContext struct {
+	context.Context
+	Workflow *Workflow
+	Stage    *Stage
+	Step     *Step
+}
+
 // StepFunc defines the function signature for a step.
-type StepFunc func(ctx context.Context, workflow *Workflow, stage *Stage, step *Step) error
+type StepFunc func(sc *StepContext) error
 
 // Step represents a unique step within a stage.
 type Step struct {
@@ -50,8 +64,8 @@ func (s *Step) setDefaultValues() {
 	}
 }
 
-// NewStep returns a new step.
-func NewStep(name string, fn StepFunc, opts ...StepOption) *Step {
+// NewStep returns a new step and its typed reference.
+func NewStep(name string, fn StepFunc, opts ...StepOption) (*Step, StepRef) {
 	s := &Step{
 		Name: name,
 		Func: fn,
@@ -61,5 +75,5 @@ func NewStep(name string, fn StepFunc, opts ...StepOption) *Step {
 		opt(s)
 	}
 
-	return s
+	return s, StepRef{name: name}
 }

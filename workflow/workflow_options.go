@@ -71,3 +71,21 @@ func WithOnFailureFn(fn func(context.Context, *Workflow, error) error) WorkflowO
 		w.OnFailureFn = fn
 	}
 }
+
+// WithSnapshotFn sets the snapshot persistence function.
+// It is called automatically before and after each step, and on failure.
+func WithSnapshotFn(fn func(ctx context.Context, w *Workflow, snapshot Snapshot) error) WorkflowOption {
+	return func(w *Workflow) {
+		w.SnapshotFn = fn
+	}
+}
+
+// WithCompensationStage configures automatic routing to a compensation stage on failure.
+// When a step fails, the workflow will set NextStage/NextStep to the compensation targets,
+// save the snapshot, and suppress the error so the next Run() continues from the compensation stage.
+func WithCompensationStage(stageRef StageRef, stepRef StepRef) WorkflowOption {
+	return func(w *Workflow) {
+		w.compensationStageRef = &stageRef
+		w.compensationStepRef = &stepRef
+	}
+}
