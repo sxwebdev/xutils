@@ -139,28 +139,14 @@ func (w *Workflow) SetSnapshot(snapshot Snapshot) error {
 	return nil
 }
 
-// SetSnapshot
+// SetJSONSnapshot restores workflow state from a JSON string.
 func (w *Workflow) SetJSONSnapshot(snapshot string) error {
 	sh := Snapshot{}
-	err := json.Unmarshal([]byte(snapshot), &sh)
-	if err != nil {
+	if err := json.Unmarshal([]byte(snapshot), &sh); err != nil {
 		return err
 	}
 
-	for _, state := range sh.StepsStates {
-		for _, stage := range w.Stages {
-			for _, step := range stage.Steps {
-				if stage.Name == state.CurrentStage &&
-					step.Name == state.CurrentStep {
-					step.State = state
-				}
-			}
-		}
-	}
-
-	w.State = sh.WorkflowState
-
-	return nil
+	return w.SetSnapshot(sh)
 }
 
 // CurrentStage returns the current stage for the workflow.
@@ -183,14 +169,17 @@ func (w *Workflow) CurrentStage() *Stage {
 
 // CurrentStep returns the current step for the workflow.
 func (w *Workflow) CurrentStep() *Step {
-	currentStage := w.CurrentStage().Steps
-
-	var res *Step
-	if len(currentStage) > 0 {
-		res = currentStage[0]
+	stage := w.CurrentStage()
+	if stage == nil {
+		return nil
 	}
 
-	for _, step := range slices.Backward(currentStage) {
+	var res *Step
+	if len(stage.Steps) > 0 {
+		res = stage.Steps[0]
+	}
+
+	for _, step := range slices.Backward(stage.Steps) {
 		if step.State.Status.Valid() {
 			return step
 		}

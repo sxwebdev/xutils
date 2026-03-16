@@ -27,10 +27,8 @@ func GetArg[T any](sh Snapshot, stepName, key string) (T, error) {
 		}
 
 		state.mu.RLock()
-		args := state.Args
+		val, ok := state.Args[key]
 		state.mu.RUnlock()
-
-		val, ok := args[key]
 		if !ok {
 			return arg, fmt.Errorf("value not found for key %s: %w", key, ErrNotFound)
 		}

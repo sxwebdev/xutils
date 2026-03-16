@@ -151,11 +151,17 @@ func (w *Workflow) execute(ctx context.Context) (err error) {
 }
 
 func (w *Workflow) init() error {
-	// check steps in stages for unique names
+	// check stages for unique names
+	uniqueStages := make(map[string]struct{})
 	for stageIdx, stage := range w.Stages {
 		if stage == nil {
 			return fmt.Errorf("stage at index [%d] is nil", stageIdx)
 		}
+
+		if _, ok := uniqueStages[stage.Name]; ok {
+			return fmt.Errorf("stage [%s] is not unique", stage.Name)
+		}
+		uniqueStages[stage.Name] = struct{}{}
 
 		uniqueSteps := make(map[string]struct{})
 		for stepIdx, step := range stage.Steps {
@@ -189,9 +195,6 @@ func (w *Workflow) init() error {
 // handleStage handles the stage.
 func (w *Workflow) handleStage(ctx context.Context, stage *Stage) error {
 	nextStageName := w.State.NextStage
-	if nextStageName != "" && nextStageName == stage.Name {
-		w.State.SetNextStage("")
-	}
 
 	w.Debugf("start stage: %s", stage.Name)
 
@@ -298,7 +301,7 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 		}
 
 		if err != nil {
-			if errors.Is(err, ErrSkipStep) || errors.Is(err, ErrBreakStages) || errors.Is(err, ErrBreakStages) {
+			if errors.Is(err, ErrSkipStep) || errors.Is(err, ErrSkipStage) || errors.Is(err, ErrBreakStages) {
 				step.State.SetStatus(StepStatusSkipped)
 			} else {
 				step.State.SetStatus(StepStatusFailed)
@@ -345,15 +348,15 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 
 	// run after function
 	if step.AfterFn != nil {
-		if err := step.AfterFn(ctx, step); err != nil {
-			return err
+		if afterErr := step.AfterFn(ctx, step); afterErr != nil {
+			return afterErr
 		}
 	}
 
 	// run after all steps function
 	if w.AfterAllStepsFn != nil {
-		if err := w.AfterAllStepsFn(ctx, w, stage, step); err != nil {
-			return err
+		if afterErr := w.AfterAllStepsFn(ctx, w, stage, step); afterErr != nil {
+			return afterErr
 		}
 	}
 

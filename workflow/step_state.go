@@ -111,16 +111,16 @@ func (s *StepState) SetError(err error) *StepState {
 }
 
 // SetArgs sets the arguments for the step.
-func (s *StepState) SetArgs(args map[string]any) (*StepState, error) {
+func (s *StepState) SetArgs(args map[string]any) *StepState {
 	s.mu.Lock()
 	s.Args = args
 	s.mu.Unlock()
 
-	return s, nil
+	return s
 }
 
-// SetArgs sets the arguments for the step.
-func (s *StepState) SetArg(key string, value any) (*StepState, error) {
+// SetArg sets a single argument for the step.
+func (s *StepState) SetArg(key string, value any) *StepState {
 	s.mu.Lock()
 	if s.Args == nil {
 		s.Args = make(map[string]any)
@@ -129,5 +129,5 @@ func (s *StepState) SetArg(key string, value any) (*StepState, error) {
 	s.Args[key] = value
 	s.mu.Unlock()
 
-	return s, nil
+	return s
 }
