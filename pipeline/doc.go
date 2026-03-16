@@ -190,6 +190,10 @@
 // This is useful during rolling deployments: old instances drain active pipelines
 // while new instances reject incompatible states and return jobs to the queue.
 //
+// If old instances are gone and old-version pipelines are stuck, use
+// [RunState.ForceTerminate] to mark them as failed without compensation,
+// or maintain a registry of old pipeline definitions to drain them gracefully.
+//
 // # Error Types
 //
 //   - [ErrSnooze] — poll step is waiting; contains Duration hint for retry

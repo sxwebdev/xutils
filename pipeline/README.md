@@ -225,6 +225,39 @@ When deploying a new app version with changed pipeline definitions:
 
 The library provides the mechanism; the application handles the policy (retry, drain, migrate).
 
+### Stuck pipelines
+
+If old instances are gone and old-version pipelines remain in non-terminal state, there are three strategies:
+
+**Pipeline registry** — new code carries old definitions, routes by state version:
+
+```go
+var pipelines = map[int]*pipeline.Pipeline{
+    1: transferV1(), // old definition for drain/compensation
+    2: transferV2(), // current
+}
+
+func handleJob(ctx context.Context, state pipeline.RunState) {
+    p := pipelines[state.Version]
+    if p == nil {
+        state.ForceTerminate("unsupported pipeline version")
+        saveState(state)
+        return
+    }
+    state, err := executor.Run(ctx, p, state)
+    // ...
+}
+```
+
+**Force terminate** — mark stuck pipelines as failed without compensation:
+
+```go
+state.ForceTerminate("version drain timeout")
+saveState(state)
+```
+
+**Compensation-only definitions** — keep old pipeline structure with only `Compensate` functions to safely rollback stuck pipelines before discarding them.
+
 ## Validation
 
 The executor validates the pipeline definition on each `Run`:

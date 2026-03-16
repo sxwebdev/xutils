@@ -1036,3 +1036,33 @@ func TestVersionPollingResumeWithSameVersion(t *testing.T) {
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 2, state.Version)
 }
+
+func TestForceTerminate(t *testing.T) {
+	state := RunState{
+		Version: 1,
+		Status:  RunStatusRunning,
+	}
+
+	state.ForceTerminate("version drain timeout")
+
+	assert.Equal(t, RunStatusFailed, state.Status)
+	assert.Equal(t, "version drain timeout", state.Error)
+	assert.True(t, state.IsTerminal())
+
+	// Run on force-terminated state returns immediately.
+	p := &Pipeline{
+		Name:    "test",
+		Version: 1,
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error {
+				t.Fatal("should not execute")
+				return nil
+			}),
+		},
+	}
+
+	executor := newTestExecutor(t, nil)
+	state, err := executor.Run(context.Background(), p, state)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusFailed, state.Status)
+}

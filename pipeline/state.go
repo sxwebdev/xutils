@@ -75,3 +75,11 @@ type CompletedStep struct {
 func (s RunState) IsTerminal() bool {
 	return s.Status == RunStatusCompleted || s.Status == RunStatusFailed
 }
+
+// ForceTerminate marks the pipeline as failed without compensation.
+// Use when a pipeline is stuck and cannot be resumed (e.g., version drain timeout,
+// all old instances are gone). The caller must persist the state after calling this.
+func (s *RunState) ForceTerminate(reason string) {
+	s.Status = RunStatusFailed
+	s.Error = reason
+}
