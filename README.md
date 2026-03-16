@@ -1,5 +1,10 @@
 # xutils
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/sxwebdev/xutils.svg)](https://pkg.go.dev/github.com/sxwebdev/xutils)
+[![Go Version](https://img.shields.io/badge/go-1.25-blue)](https://go.dev/)
+[![Go Report Card](https://goreportcard.com/badge/github.com/sxwebdev/xutils)](https://goreportcard.com/report/github.com/sxwebdev/xutils)
+[![License](https://img.shields.io/github/license/sxwebdev/xutils)](LICENSE)
+
 A collection of Go utility packages.
 
 ```text
