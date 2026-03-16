@@ -27,6 +27,10 @@ const (
 // It is serialized to JSON and stored in the database.
 // On restart, the executor loads RunState and resumes from where it left off.
 type RunState struct {
+	// Version is the pipeline definition version that created this state.
+	// 0 means legacy (created before versioning was added).
+	Version int `json:"version,omitempty"`
+
 	// Status is the current pipeline status.
 	Status RunStatus `json:"status"`
 

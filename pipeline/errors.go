@@ -71,3 +71,23 @@ type ErrPollTimeout struct {
 func (e *ErrPollTimeout) Error() string {
 	return fmt.Sprintf("pipeline: poll step %q exceeded max duration %s", e.StepName, e.MaxDuration)
 }
+
+// ErrVersionMismatch is returned when the pipeline definition version
+// is incompatible with the state's version.
+type ErrVersionMismatch struct {
+	// PipelineName is the name of the pipeline.
+	PipelineName string
+	// StateVersion is the version stored in the RunState.
+	StateVersion int
+	// PipelineVersion is the current pipeline definition version.
+	PipelineVersion int
+	// MinResumeVersion is the minimum state version the pipeline accepts.
+	MinResumeVersion int
+}
+
+func (e *ErrVersionMismatch) Error() string {
+	return fmt.Sprintf(
+		"pipeline %q: version mismatch: state version %d not in allowed range [%d, %d]",
+		e.PipelineName, e.StateVersion, e.MinResumeVersion, e.PipelineVersion,
+	)
+}

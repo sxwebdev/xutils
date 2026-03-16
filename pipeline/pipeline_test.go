@@ -795,3 +795,243 @@ func TestErrorContextInCompensation(t *testing.T) {
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.True(t, compensationSawContext, "compensation should see data from earlier steps")
 }
+
+// --- Version tests ---
+
+func intPtr(v int) *int { return &v }
+
+func TestVersionStampedOnNewExecution(t *testing.T) {
+	p := &Pipeline{
+		Name:    "versioned",
+		Version: 3,
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { return nil }),
+		},
+	}
+
+	executor := newTestExecutor(t, nil)
+	state, err := executor.Run(context.Background(), p, RunState{})
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusCompleted, state.Status)
+	assert.Equal(t, 3, state.Version)
+}
+
+func TestVersionMismatchRejectsOldState(t *testing.T) {
+	p := &Pipeline{
+		Name:    "versioned",
+		Version: 2,
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { return nil }),
+		},
+	}
+
+	// Simulate a v1 state that is running (mid-execution).
+	state := RunState{
+		Version: 1,
+		Status:  RunStatusRunning,
+	}
+
+	executor := newTestExecutor(t, nil)
+	state, err := executor.Run(context.Background(), p, state)
+	require.Error(t, err)
+
+	var vErr *ErrVersionMismatch
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, 1, vErr.StateVersion)
+	assert.Equal(t, 2, vErr.PipelineVersion)
+	assert.Equal(t, 2, vErr.MinResumeVersion)
+}
+
+func TestVersionMismatchRejectsNewerState(t *testing.T) {
+	p := &Pipeline{
+		Name:    "versioned",
+		Version: 1,
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { return nil }),
+		},
+	}
+
+	state := RunState{
+		Version: 2,
+		Status:  RunStatusRunning,
+	}
+
+	executor := newTestExecutor(t, nil)
+	_, err := executor.Run(context.Background(), p, state)
+	require.Error(t, err)
+
+	var vErr *ErrVersionMismatch
+	require.ErrorAs(t, err, &vErr)
+	assert.Equal(t, 2, vErr.StateVersion)
+	assert.Equal(t, 1, vErr.PipelineVersion)
+}
+
+func TestVersionMinResumeVersionAllowsOldState(t *testing.T) {
+	var executed bool
+	p := &Pipeline{
+		Name:             "versioned",
+		Version:          2,
+		MinResumeVersion: intPtr(1),
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error {
+				executed = true
+				return nil
+			}),
+		},
+	}
+
+	state := RunState{
+		Version: 1,
+		Status:  RunStatusRunning,
+	}
+
+	executor := newTestExecutor(t, nil)
+	state, err := executor.Run(context.Background(), p, state)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusCompleted, state.Status)
+	assert.True(t, executed)
+}
+
+func TestVersionAcceptLegacyStates(t *testing.T) {
+	p := &Pipeline{
+		Name:             "versioned",
+		Version:          1,
+		MinResumeVersion: new(int), // pointer to 0
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { return nil }),
+		},
+	}
+
+	// Legacy state with version 0.
+	state := RunState{
+		Version: 0,
+		Status:  RunStatusRunning,
+	}
+
+	executor := newTestExecutor(t, nil)
+	state, err := executor.Run(context.Background(), p, state)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusCompleted, state.Status)
+}
+
+func TestVersionLegacyBackwardCompat(t *testing.T) {
+	// v0 pipeline + v0 state — should work as before.
+	p := &Pipeline{
+		Name: "legacy",
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { return nil }),
+		},
+	}
+
+	executor := newTestExecutor(t, nil)
+	state, err := executor.Run(context.Background(), p, RunState{})
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusCompleted, state.Status)
+	assert.Equal(t, 0, state.Version)
+}
+
+func TestVersionTerminalStateSkipsCheck(t *testing.T) {
+	p := &Pipeline{
+		Name:    "versioned",
+		Version: 2,
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { return nil }),
+		},
+	}
+
+	// Completed state with old version — should return immediately, no error.
+	state := RunState{
+		Version: 1,
+		Status:  RunStatusCompleted,
+	}
+
+	executor := newTestExecutor(t, nil)
+	state, err := executor.Run(context.Background(), p, state)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusCompleted, state.Status)
+}
+
+func TestVersionMismatchCompensatingState(t *testing.T) {
+	p := &Pipeline{
+		Name:    "versioned",
+		Version: 2,
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { return nil }),
+		},
+	}
+
+	// State in compensating status with old version.
+	state := RunState{
+		Version: 1,
+		Status:  RunStatusCompensating,
+	}
+
+	executor := newTestExecutor(t, nil)
+	_, err := executor.Run(context.Background(), p, state)
+	require.Error(t, err)
+
+	var vErr *ErrVersionMismatch
+	require.ErrorAs(t, err, &vErr)
+}
+
+func TestVersionValidation(t *testing.T) {
+	executor := newTestExecutor(t, nil)
+
+	// Negative version.
+	_, err := executor.Run(context.Background(), &Pipeline{
+		Name:    "bad",
+		Version: -1,
+		Steps:   []Step{Action("s", func(_ context.Context, _ DataAccessor) error { return nil })},
+	}, RunState{})
+	assert.ErrorContains(t, err, "version must be >= 0")
+
+	// MinResumeVersion > Version.
+	_, err = executor.Run(context.Background(), &Pipeline{
+		Name:             "bad",
+		Version:          1,
+		MinResumeVersion: intPtr(2),
+		Steps:            []Step{Action("s", func(_ context.Context, _ DataAccessor) error { return nil })},
+	}, RunState{})
+	assert.ErrorContains(t, err, "min resume version (2) cannot exceed version (1)")
+
+	// Negative MinResumeVersion.
+	_, err = executor.Run(context.Background(), &Pipeline{
+		Name:             "bad",
+		Version:          1,
+		MinResumeVersion: intPtr(-1),
+		Steps:            []Step{Action("s", func(_ context.Context, _ DataAccessor) error { return nil })},
+	}, RunState{})
+	assert.ErrorContains(t, err, "min resume version must be >= 0")
+}
+
+func TestVersionPollingResumeWithSameVersion(t *testing.T) {
+	pollCount := 0
+	p := &Pipeline{
+		Name:    "poll-versioned",
+		Version: 2,
+		Steps: []Step{
+			Poll("wait", func(_ context.Context, _ DataAccessor) (bool, time.Duration, error) {
+				pollCount++
+				if pollCount < 2 {
+					return false, time.Millisecond, nil
+				}
+				return true, 0, nil
+			}),
+		},
+	}
+
+	executor := newTestExecutor(t, nil)
+
+	// First run — gets snooze.
+	state, err := executor.Run(context.Background(), p, RunState{})
+	require.Error(t, err)
+	var snooze ErrSnooze
+	require.ErrorAs(t, err, &snooze)
+	assert.Equal(t, 2, state.Version)
+
+	// Resume with same version — should complete.
+	state, err = executor.Run(context.Background(), p, state)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusCompleted, state.Status)
+	assert.Equal(t, 2, state.Version)
+}

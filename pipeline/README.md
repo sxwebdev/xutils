@@ -167,6 +167,66 @@ pipeline.WithRetry(
 
 Retries respect context cancellation.
 
+## Versioning
+
+Pipeline definitions support versioning to prevent resuming a state created by an incompatible pipeline version.
+
+```go
+p := &pipeline.Pipeline{
+    Name:    "transfer",
+    Version: 2,
+    Steps:   []pipeline.Step{ /* ... */ },
+}
+```
+
+When `Run` is called on a new `RunState`, the pipeline's `Version` is stamped into the state. On resume, the executor checks that the state version falls within the pipeline's allowed range. If not, `ErrVersionMismatch` is returned.
+
+### Backward compatibility
+
+By default, only exact version match is accepted. To allow resuming states from older versions, set `MinResumeVersion`:
+
+```go
+minV := 1
+p := &pipeline.Pipeline{
+    Name:             "transfer",
+    Version:          2,
+    MinResumeVersion: &minV, // accept states from v1 and v2
+    Steps:            []pipeline.Step{ /* ... */ },
+}
+```
+
+To accept legacy unversioned states (version 0):
+
+```go
+p := &pipeline.Pipeline{
+    Name:             "transfer",
+    Version:          1,
+    MinResumeVersion: new(int), // pointer to 0
+    Steps:            []pipeline.Step{ /* ... */ },
+}
+```
+
+### Handling version mismatch
+
+```go
+state, err := executor.Run(ctx, p, state)
+var vErr *pipeline.ErrVersionMismatch
+if errors.As(err, &vErr) {
+    // vErr.StateVersion, vErr.PipelineVersion, vErr.MinResumeVersion
+    // Application decides: retry later, discard, force-compensate, migrate state.
+}
+```
+
+### Rolling deployments
+
+When deploying a new app version with changed pipeline definitions:
+
+1. Old instances finish active pipelines with old version
+2. New instances reject old-version states with `ErrVersionMismatch` — return the job to the queue
+3. After all old pipelines complete, only new-version pipelines remain
+
+The library provides the mechanism; the application handles the policy (retry, drain, migrate).
+
 ## Validation
 
 The executor validates the pipeline definition on each `Run`:

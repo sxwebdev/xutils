@@ -13,6 +13,13 @@ type Pipeline struct {
 	Name string
 	// Steps is the ordered list of steps to execute.
 	Steps []Step
+	// Version is the current version of this pipeline definition.
+	// 0 means unversioned (legacy, backward compatible).
+	Version int
+	// MinResumeVersion is the minimum state version this pipeline can resume.
+	// nil means only the current Version is accepted (exact match).
+	// Set explicitly to allow resuming older states.
+	MinResumeVersion *int
 }
 
 // Step is a sealed sum type: exactly one of Action, Poll, or Branch must be set.
@@ -171,10 +178,30 @@ func (d *dataStore) restoreData(data map[string]json.RawMessage) {
 	}
 }
 
+// effectiveMinResumeVersion returns the minimum state version this pipeline can resume.
+// If MinResumeVersion is nil, defaults to Version (exact match only).
+func (p *Pipeline) effectiveMinResumeVersion() int {
+	if p.MinResumeVersion != nil {
+		return *p.MinResumeVersion
+	}
+	return p.Version
+}
+
 // validate checks the pipeline definition for errors.
 func (p *Pipeline) validate() error {
 	if p.Name == "" {
 		return fmt.Errorf("pipeline: name is required")
+	}
+	if p.Version < 0 {
+		return fmt.Errorf("pipeline %q: version must be >= 0", p.Name)
+	}
+	if p.MinResumeVersion != nil {
+		if *p.MinResumeVersion < 0 {
+			return fmt.Errorf("pipeline %q: min resume version must be >= 0", p.Name)
+		}
+		if *p.MinResumeVersion > p.Version {
+			return fmt.Errorf("pipeline %q: min resume version (%d) cannot exceed version (%d)", p.Name, *p.MinResumeVersion, p.Version)
+		}
 	}
 	if len(p.Steps) == 0 {
 		return fmt.Errorf("pipeline %q: no steps defined", p.Name)

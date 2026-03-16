@@ -152,6 +152,44 @@
 // The pipeline will fail without running compensation. The caller can then
 // re-invoke [Executor.Run] with the same state to retry from the failed step.
 //
+// # Versioning
+//
+// Pipeline definitions support versioning to prevent resuming a state created by
+// an incompatible pipeline version. Set [Pipeline.Version] on the definition:
+//
+//	p := &pipeline.Pipeline{
+//		Name:    "transfer",
+//		Version: 2,
+//		Steps:   []pipeline.Step{ /* ... */ },
+//	}
+//
+// When [Executor.Run] is called on a new [RunState], the pipeline's Version is
+// stamped into the state. On resume, the executor checks that the state version
+// falls within the allowed range [effectiveMinResumeVersion, Pipeline.Version].
+// If not, [ErrVersionMismatch] is returned.
+//
+// By default, only exact version match is accepted. To allow resuming older states,
+// set [Pipeline.MinResumeVersion]:
+//
+//	minV := 1
+//	p := &pipeline.Pipeline{
+//		Name:             "transfer",
+//		Version:          2,
+//		MinResumeVersion: &minV, // accept states from v1 and v2
+//		Steps:            []pipeline.Step{ /* ... */ },
+//	}
+//
+// To accept legacy unversioned states (version 0), pass a pointer to zero:
+//
+//	p := &pipeline.Pipeline{
+//		Name:             "transfer",
+//		Version:          1,
+//		MinResumeVersion: new(int), // pointer to 0
+//	}
+//
+// This is useful during rolling deployments: old instances drain active pipelines
+// while new instances reject incompatible states and return jobs to the queue.
+//
 // # Error Types
 //
 //   - [ErrSnooze] — poll step is waiting; contains Duration hint for retry
@@ -159,6 +197,7 @@
 //   - [ErrPollTimeout] — poll step exceeded its [WithMaxPollDuration] limit
 //   - [ErrCompensationFailed] — compensation failed; contains Original and Compensation errors
 //   - [ErrNoCompensate] — sentinel used by [NoCompensate] to skip compensation
+//   - [ErrVersionMismatch] — state version incompatible with pipeline definition version
 //
 // # Retry
 //

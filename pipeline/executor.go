@@ -50,6 +50,16 @@ func (e *Executor) Run(ctx context.Context, p *Pipeline, state RunState) (RunSta
 		return state, nil
 	}
 
+	// Stamp version on new executions.
+	if state.Status == RunStatusNew {
+		state.Version = p.Version
+	} else {
+		// Version check for resume (non-new, non-terminal).
+		if err := checkVersion(p, state); err != nil {
+			return state, err
+		}
+	}
+
 	// Initialize data store.
 	ds := newDataStore()
 	if state.Data != nil {
@@ -588,6 +598,20 @@ func (e *Executor) snapshot(ctx context.Context, state RunState) error {
 		return nil
 	}
 	return e.snapshotFn(ctx, state)
+}
+
+// checkVersion verifies the pipeline definition can resume the given state.
+func checkVersion(p *Pipeline, state RunState) error {
+	minVersion := p.effectiveMinResumeVersion()
+	if state.Version < minVersion || state.Version > p.Version {
+		return &ErrVersionMismatch{
+			PipelineName:     p.Name,
+			StateVersion:     state.Version,
+			PipelineVersion:  p.Version,
+			MinResumeVersion: minVersion,
+		}
+	}
+	return nil
 }
 
 // isPathPrefix checks if prefix is a prefix of path and path is longer.
