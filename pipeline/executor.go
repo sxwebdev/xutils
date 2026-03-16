@@ -148,8 +148,7 @@ func (e *Executor) executeSteps(
 		state, err = e.executeStep(ctx, p, state, ds, step, stepPath)
 		if err != nil {
 			// ErrSnooze — poll step waiting, return to caller.
-			var snoozeErr ErrSnooze
-			if errors.As(err, &snoozeErr) {
+			if _, ok := errors.AsType[ErrSnooze](err); ok {
 				return state, err
 			}
 

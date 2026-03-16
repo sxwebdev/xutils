@@ -97,14 +97,13 @@ The executor is **stateless** — all state lives in `RunState` which is passed 
 state := loadFromDB(jobID) // RunState{} for new jobs
 
 state, err := executor.Run(ctx, p, state)
-switch {
-case err == nil:
+if err == nil {
     // Done. Check state.Status: "completed" or "failed".
-case errors.As(err, &pipeline.ErrSnooze{}):
+} else if snooze, ok := errors.AsType[pipeline.ErrSnooze](err); ok {
     // Poll step waiting. Save state, re-invoke after snooze.Duration.
     saveState(jobID, state)
     scheduleRetry(jobID, snooze.Duration)
-default:
+} else {
     // Engine error.
 }
 ```
@@ -210,8 +209,7 @@ p := &pipeline.Pipeline{
 
 ```go
 state, err := executor.Run(ctx, p, state)
-var vErr *pipeline.ErrVersionMismatch
-if errors.As(err, &vErr) {
+if vErr, ok := errors.AsType[*pipeline.ErrVersionMismatch](err); ok {
     // vErr.StateVersion, vErr.PipelineVersion, vErr.MinResumeVersion
     // Application decides: retry later, discard, force-compensate, migrate state.
 }

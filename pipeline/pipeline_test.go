@@ -99,8 +99,8 @@ func TestPollWithSnooze(t *testing.T) {
 	// First run — poll returns not done.
 	state, err := executor.Run(context.Background(), p, RunState{})
 	require.Error(t, err)
-	var snooze ErrSnooze
-	require.True(t, errors.As(err, &snooze))
+	snooze, ok := errors.AsType[ErrSnooze](err)
+	require.True(t, ok)
 	assert.Equal(t, 100*time.Millisecond, snooze.Duration)
 	assert.Equal(t, RunStatusPolling, state.Status)
 	assert.Equal(t, 1, pollCount)
@@ -108,7 +108,8 @@ func TestPollWithSnooze(t *testing.T) {
 	// Second run — resume, poll returns not done again.
 	state, err = executor.Run(context.Background(), p, state)
 	require.Error(t, err)
-	require.True(t, errors.As(err, &snooze))
+	_, ok = errors.AsType[ErrSnooze](err)
+	require.True(t, ok)
 	assert.Equal(t, 2, pollCount)
 
 	// Third run — resume, poll returns done, pipeline completes.
@@ -355,8 +356,8 @@ func TestDataPersistenceThroughSnapshot(t *testing.T) {
 	// First run — setup completes, poll snoozes.
 	state, err := executor.Run(context.Background(), p, RunState{})
 	require.Error(t, err)
-	var snooze ErrSnooze
-	require.True(t, errors.As(err, &snooze))
+	_, ok := errors.AsType[ErrSnooze](err)
+	require.True(t, ok)
 
 	// Verify data is in the state.
 	assert.NotNil(t, state.Data["counter"])
@@ -698,8 +699,8 @@ func TestResumePollInsideBranch(t *testing.T) {
 	// First run — enter branch, complete setup, poll snoozes.
 	state, err := executor.Run(context.Background(), p, RunState{})
 	require.Error(t, err)
-	var snooze ErrSnooze
-	require.True(t, errors.As(err, &snooze))
+	_, ok := errors.AsType[ErrSnooze](err)
+	require.True(t, ok)
 	assert.Equal(t, 1, pollCount)
 	// CurrentPath should be inside the branch.
 	assert.Equal(t, []string{"decide", "path_a", "wait"}, state.CurrentPath)
