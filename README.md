@@ -28,3 +28,32 @@ go get github.com/sxwebdev/xutils
 | `timeutil`   | Function execution time measurement                                                                                             |
 | `pipeline`   | Declarative resumable workflow engine with action/poll/branch steps, saga compensation and snapshot persistence                 |
 | `workflow`   | Stage-based workflow engine with steps, retry policies and lifecycle hooks                                                      |
+
+## AI Agent Skills
+
+This repository includes [AI agent skills](https://github.com/sxwebdev/skills) with documentation and usage examples for all packages. Install them with the [skills](https://github.com/sxwebdev/skills) CLI:
+
+```bash
+go install github.com/sxwebdev/skills/cmd/skills@latest
+skills init
+skills repo add sxwebdev/xutils
+```
+
+## Project Structure
+
+```text
+├── /skills/xutils # AI agent skills for Claude Code and other agents
+├── broker/        # Generic thread-safe pub/sub message broker
+├── cacheutil/     # Cache interface for key-value storage with JSON and TTL support
+├── dbutil/        # Database helpers: pagination, JSON column, duration column, tx wrapper
+├── loggerutil/    # Minimal logger interface with no-op and test implementations
+├── loopper/       # Periodic task runner with context timeout and panic recovery
+├── pipeline/      # Declarative resumable workflow engine (action/poll/branch, saga, snapshots)
+├── randutil/      # Cryptographically secure random string and number generation
+├── retry/         # Retry mechanism with linear, backoff and infinite policies
+├── strutil/       # String helpers: UTF-8 cleanup, number and duration formatting
+├── syncutil/      # Thread-safe generic containers: Map, Slice, Locker
+├── testutil/      # Test helpers: pretty-print as indented JSON
+├── timeutil/      # Function execution time measurement
+└── workflow/      # Stage-based workflow engine with retry, snapshots and lifecycle hooks
+```
