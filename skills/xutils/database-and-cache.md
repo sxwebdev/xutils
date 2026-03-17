@@ -25,6 +25,7 @@ limit, offset, err := dbutil.Pagination(&page, &size, dbutil.WithMaxLimit(50))
 ```
 
 **Validation rules:**
+
 - `page` must be >= 1 (0 is an error)
 - `pageSize` must be >= 1
 - If `MaxLimit` is set, `pageSize` must not exceed it

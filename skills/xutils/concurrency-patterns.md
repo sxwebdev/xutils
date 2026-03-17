@@ -114,6 +114,7 @@ b.Stop() // closes all subscriber channels and waits
 ```
 
 **Key details:**
+
 - Publish channel buffer: 16
 - Subscriber channel buffer: 8
 - `Subscribe()` returns `nil` after `Stop()` is called
@@ -152,6 +153,7 @@ sync.Wait() // wait for current execution to finish
 ```
 
 **Key details:**
+
 - Overlapping prevention: if fn is still running when the next tick fires, the tick is skipped
 - Panic recovery: panics are logged and the loop continues
 - Leading mode: executes fn immediately on `Start()` before the first tick
