@@ -1,7 +1,7 @@
 ---
 name: xutils
 description: Go utility packages collection (github.com/sxwebdev/xutils) — pub/sub broker, syncutil containers, retry, pipeline/workflow engines, dbutil, cacheutil, and more. Triggers when code imports xutils packages.
-user-invocable: false
+user-invocable: true
 ---
 
 # xutils
