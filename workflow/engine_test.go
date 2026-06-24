@@ -3,6 +3,7 @@ package workflow_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -365,6 +366,62 @@ func TestContextCancellation_StopsWorkflow(t *testing.T) {
 	err := wf.Run(ctx)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+// Regression: on the shutdown-timeout path, execute() is still running in its
+// goroutine and owns the workflow state. Run must not run the failure pipeline
+// (which reads/mutates that state via GetSnapshot, OnFailureFn, compensation),
+// or it races the live goroutine. Run under -race: this failed before finish()
+// was gated on execute() actually returning.
+func TestShutdownTimeout_NoRaceWithFailurePipeline(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+
+	step, _ := workflow.NewStep("ignores-ctx", func(sc *workflow.StepContext) error {
+		defer close(stopped)
+		// Keep mutating shared workflow state, ignoring cancellation, until the
+		// test releases us — well past the shutdown timeout below.
+		for {
+			select {
+			case <-stop:
+				return nil
+			default:
+				sc.Workflow.State.NextStep = "x"
+				workflow.SetVar(sc.Workflow, "k", 1)
+				time.Sleep(50 * time.Microsecond)
+			}
+		}
+	})
+
+	var onFailure, snapshots atomic.Int32
+	wf := workflow.New(
+		workflow.WithShutdownTimeout(20*time.Millisecond),
+		workflow.WithSnapshotFn(func(_ context.Context, w *workflow.Workflow, _ workflow.Snapshot) error {
+			snapshots.Add(1)
+			return nil
+		}),
+		workflow.WithOnFailureFn(func(_ context.Context, _ *workflow.Workflow, _ error) error {
+			onFailure.Add(1)
+			return nil
+		}),
+	)
+	wf.Stages = []*workflow.Stage{{Name: "s", Steps: []*workflow.Step{step}}}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	err := wf.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shutdown")
+	// The run was abandoned mid-flight, not failed: the failure pipeline must not
+	// have touched the live state.
+	assert.Zero(t, onFailure.Load(), "OnFailureFn must not run on shutdown timeout")
+
+	close(stop)
+	<-stopped
 }
 
 func TestShutdownTimeout(t *testing.T) {

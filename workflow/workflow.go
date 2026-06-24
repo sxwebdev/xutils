@@ -75,51 +75,7 @@ func New(opts ...WorkflowOption) *Workflow {
 }
 
 // Run executes the workflow.
-func (w *Workflow) Run(ctx context.Context) (err error) {
-	defer func() {
-		if err == nil {
-			return
-		}
-
-		// save snapshot on failure
-		if w.SnapshotFn != nil {
-			if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
-				w.Errorf("snapshot on failure: %s", snapshotErr)
-			}
-		}
-
-		// call user's OnFailureFn first (for custom error serialization, etc.)
-		if w.OnFailureFn != nil {
-			failureErr := w.OnFailureFn(ctx, w, err)
-			if failureErr != nil {
-				if w.logger != nil {
-					w.Errorf("workflow on failure: %s", failureErr)
-				}
-			}
-		}
-
-		// apply automatic compensation if configured — but only for failures that
-		// occurred during step execution, not setup/validation errors.
-		if w.compensationStageRef != nil && w.compensationStepRef != nil && w.executionStarted.Load() {
-			w.State.SetError(err)
-			w.State.GoToStage(*w.compensationStageRef)
-			w.State.GoToStep(*w.compensationStepRef)
-
-			// save snapshot after compensation navigation
-			if w.SnapshotFn != nil {
-				if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
-					w.Errorf("snapshot after compensation: %s", snapshotErr)
-				}
-			}
-
-			w.isSkipError = true
-		}
-
-		if w.isSkipError {
-			err = nil
-		}
-	}()
-
+func (w *Workflow) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- w.execute(ctx)
@@ -127,7 +83,7 @@ func (w *Workflow) Run(ctx context.Context) (err error) {
 
 	select {
 	case err := <-errCh:
-		return err
+		return w.finish(ctx, err)
 	case <-ctx.Done():
 		w.isStopped.Store(true)
 	}
@@ -139,10 +95,63 @@ func (w *Workflow) Run(ctx context.Context) (err error) {
 
 	select {
 	case <-time.After(shutdownTimeout):
+		// execute() exceeded the grace period and is still running in its
+		// goroutine, which still owns the workflow state. Return the timeout
+		// without running the failure pipeline or reading the state: doing so
+		// here would race the live goroutine (and mis-route the navigation it is
+		// concurrently writing). The run is abandoned, not failed.
 		return fmt.Errorf("workflow shutdown execution timeout")
 	case err := <-errCh:
-		return err
+		return w.finish(ctx, err)
 	}
+}
+
+// finish runs the failure-handling pipeline — failure snapshot, OnFailureFn, and
+// automatic compensation routing — after execute() has returned. It must be
+// called only once the execute goroutine has finished, so it can read and mutate
+// workflow state without racing it. It returns the error Run should surface: nil
+// when compensation routing or SetSkipError suppresses it.
+func (w *Workflow) finish(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	// save snapshot on failure
+	if w.SnapshotFn != nil {
+		if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
+			w.Errorf("snapshot on failure: %s", snapshotErr)
+		}
+	}
+
+	// call user's OnFailureFn first (for custom error serialization, etc.)
+	if w.OnFailureFn != nil {
+		if failureErr := w.OnFailureFn(ctx, w, err); failureErr != nil {
+			w.Errorf("workflow on failure: %s", failureErr)
+		}
+	}
+
+	// apply automatic compensation if configured — but only for failures that
+	// occurred during step execution, not setup/validation errors.
+	if w.compensationStageRef != nil && w.compensationStepRef != nil && w.executionStarted.Load() {
+		w.State.SetError(err)
+		w.State.GoToStage(*w.compensationStageRef)
+		w.State.GoToStep(*w.compensationStepRef)
+
+		// save snapshot after compensation navigation
+		if w.SnapshotFn != nil {
+			if snapshotErr := w.SnapshotFn(ctx, w, w.GetSnapshot()); snapshotErr != nil {
+				w.Errorf("snapshot after compensation: %s", snapshotErr)
+			}
+		}
+
+		w.isSkipError = true
+	}
+
+	if w.isSkipError {
+		return nil
+	}
+
+	return err
 }
 
 func (w *Workflow) execute(ctx context.Context) (err error) {
