@@ -19,6 +19,11 @@
 // A non-positive length yields an empty string. An empty alphabet passed to
 // [WithAlphabet] is ignored, keeping the default.
 //
+// The alphabet is treated as a sequence of bytes, not runes: each output
+// character is one byte drawn from it. Use an ASCII alphabet — a multi-byte
+// (non-ASCII) alphabet is indexed per byte and can yield invalid UTF-8. The
+// alphabet may hold at most 256 bytes; a larger one returns an error.
+//
 // # Random Numbers
 //
 // [GenerateRandomNumber] returns a random int64 with an exact number of decimal

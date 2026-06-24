@@ -1,6 +1,9 @@
 package randutil
 
-import "crypto/rand"
+import (
+	"crypto/rand"
+	"fmt"
+)
 
 const defaultAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-@#$%"
 
@@ -13,6 +16,10 @@ type stringOptions struct {
 
 // WithAlphabet sets the alphabet used to build the random string. An empty
 // alphabet is ignored, keeping the default.
+//
+// The alphabet is byte-indexed, so use ASCII: a multi-byte (non-ASCII) alphabet
+// can produce invalid UTF-8. It may hold at most 256 bytes; a larger one makes
+// [GenerateRandomString] return an error.
 func WithAlphabet(alphabet string) Option {
 	return func(o *stringOptions) {
 		if alphabet != "" {
@@ -25,7 +32,9 @@ func WithAlphabet(alphabet string) Option {
 // By default it uses a built-in alphabet; override it with WithAlphabet.
 //
 // Characters are drawn uniformly from the alphabet using crypto/rand with
-// rejection sampling, so the result is free of modulo bias.
+// rejection sampling, so the result is free of modulo bias. The alphabet is
+// byte-indexed (use ASCII) and may hold at most 256 bytes; a larger alphabet
+// returns an error.
 func GenerateRandomString(n int, opts ...Option) (string, error) {
 	if n <= 0 {
 		return "", nil
@@ -37,9 +46,19 @@ func GenerateRandomString(n int, opts ...Option) (string, error) {
 	}
 	alphabet := o.alphabet
 
-	// rejection sampling: take bytes up to the nearest multiple of len(alphabet)
-	alLen := byte(len(alphabet))
-	maxrb := byte(255 - (256 % int(alLen)))
+	// Selection is driven by a single random byte (256 distinct values), so the
+	// alphabet must fit in that space. Rejecting here avoids two bugs the byte
+	// math otherwise hits: len==256 makes byte(len)==0 (divide by zero) and
+	// len>256 truncates byte(len), silently collapsing the alphabet.
+	alLen := len(alphabet)
+	if alLen > 256 {
+		return "", fmt.Errorf("randutil: alphabet too large: %d bytes (max 256)", alLen)
+	}
+
+	// Rejection sampling: accept only bytes in [0, accept), the largest multiple
+	// of alLen that fits in a byte, so every alphabet index is equally likely
+	// (no modulo bias). For alLen==256, accept==256: every byte is usable.
+	accept := 256 - (256 % alLen)
 
 	out := make([]byte, n)
 	i := 0
@@ -52,10 +71,10 @@ func GenerateRandomString(n int, opts ...Option) (string, error) {
 			return "", err
 		}
 		for _, rb := range buf {
-			if rb > maxrb {
+			if int(rb) >= accept {
 				continue // discard to avoid modulo bias
 			}
-			out[i] = alphabet[int(rb)%int(alLen)]
+			out[i] = alphabet[int(rb)%alLen]
 			i++
 			if i == n {
 				break
