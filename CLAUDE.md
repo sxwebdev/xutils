@@ -49,16 +49,22 @@ Write tests that verify **behavior**, not the implementation. Concretely:
 
 ### Coverage
 
-- Keep statement coverage **≥ 95% per package**.
-- Check it before finishing:
+- **Always aim for 100% statement coverage per package.** ≥ 95% is the hard
+  floor, not the target — every uncovered line is a line no test exercises, so
+  treat the gap as work left to do, not as "good enough".
+- Close the gap by covering real behavior (error branches, edge cases, every
+  policy/mode), never by adding tautological tests just to move the number.
+- Check it before finishing, and inspect what is still uncovered:
   ```bash
   go test ./<pkg>/ -count=1 -race -coverprofile=cover.out
-  go tool cover -func=cover.out | tail -1
+  go tool cover -func=cover.out | tail -1        # total
+  go tool cover -func=cover.out | grep -v 100.0% # what is left
   ```
 - The only acceptable gaps are defensive branches that cannot be triggered
   without unreasonable cost (e.g. an integer-overflow guard that would require a
-  multi-day sleep). Note such exclusions rather than padding with tautological
-  tests.
+  multi-day sleep, or a `default` made unreachable by prior validation). Each
+  such line must be a deliberate, named exclusion — explain why it is
+  unreachable rather than leaving it silently uncovered.
 
 ## Documentation
 
