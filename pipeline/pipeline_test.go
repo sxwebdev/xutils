@@ -844,8 +844,6 @@ func TestErrorContextInCompensation(t *testing.T) {
 
 // --- Version tests ---
 
-func intPtr(v int) *int { return &v }
-
 func TestVersionStampedOnNewExecution(t *testing.T) {
 	p := &Pipeline{
 		Name:    "versioned",
@@ -917,7 +915,7 @@ func TestVersionMinResumeVersionAllowsOldState(t *testing.T) {
 	p := &Pipeline{
 		Name:             "versioned",
 		Version:          2,
-		MinResumeVersion: intPtr(1),
+		MinResumeVersion: new(1),
 		Steps: []Step{
 			Action("step1", func(_ context.Context, _ DataAccessor) error {
 				executed = true
@@ -1035,7 +1033,7 @@ func TestVersionValidation(t *testing.T) {
 	_, err = executor.Run(context.Background(), &Pipeline{
 		Name:             "bad",
 		Version:          1,
-		MinResumeVersion: intPtr(2),
+		MinResumeVersion: new(2),
 		Steps:            []Step{Action("s", func(_ context.Context, _ DataAccessor) error { return nil })},
 	}, RunState{})
 	assert.ErrorContains(t, err, "min resume version (2) cannot exceed version (1)")
@@ -1044,7 +1042,7 @@ func TestVersionValidation(t *testing.T) {
 	_, err = executor.Run(context.Background(), &Pipeline{
 		Name:             "bad",
 		Version:          1,
-		MinResumeVersion: intPtr(-1),
+		MinResumeVersion: new(-1),
 		Steps:            []Step{Action("s", func(_ context.Context, _ DataAccessor) error { return nil })},
 	}, RunState{})
 	assert.ErrorContains(t, err, "min resume version must be >= 0")

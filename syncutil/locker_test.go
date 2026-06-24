@@ -71,13 +71,11 @@ func TestLocker_ConcurrentUpdate(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 100 {
 				l.Update(func(v *int) { *v++ })
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

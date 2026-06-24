@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -145,9 +146,7 @@ func (d *dataStore) Get(key string) (any, bool) {
 
 func (d *dataStore) All() map[string]any {
 	result := make(map[string]any, len(d.data))
-	for k, v := range d.data {
-		result[k] = v
-	}
+	maps.Copy(result, d.data)
 	return result
 }
 

@@ -213,13 +213,11 @@ func TestConcurrent_StartTriggerStop(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 100 {
 				l.Trigger(t.Context())
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -241,9 +239,7 @@ func TestConcurrent_TriggerDuringShutdownNoPanic(t *testing.T) {
 		var wg sync.WaitGroup
 		stop := make(chan struct{})
 		for range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for {
 					select {
 					case <-stop:
@@ -252,7 +248,7 @@ func TestConcurrent_TriggerDuringShutdownNoPanic(t *testing.T) {
 						l.Trigger(context.Background())
 					}
 				}
-			}()
+			})
 		}
 
 		time.Sleep(time.Millisecond)

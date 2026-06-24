@@ -180,9 +180,7 @@ func TestMap_ConcurrentSetDelete(t *testing.T) {
 	}
 	// Readers: iterate and snapshot concurrently with the writers.
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range perG {
 				m.Range(func(_, _ int) bool { return true })
 				_ = m.GetAll()
@@ -191,7 +189,7 @@ func TestMap_ConcurrentSetDelete(t *testing.T) {
 				_ = m.Has(0)
 				_ = m.Len()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

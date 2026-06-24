@@ -20,7 +20,7 @@ import (
 // Verified by reverting closeAllSubscribers to Delete + unconditional close:
 // this test panics reliably within a few iterations under -race.
 func TestBroker_UnsubscribeRacingStopDoesNotDoubleClose(t *testing.T) {
-	for iter := 0; iter < 300; iter++ {
+	for range 300 {
 		b := broker.NewBroker[int]()
 		go b.Start()
 
@@ -88,9 +88,7 @@ func TestBroker_ConcurrentPublishSubscribeAndDrain(t *testing.T) {
 
 	// Publishers.
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -99,7 +97,7 @@ func TestBroker_ConcurrentPublishSubscribeAndDrain(t *testing.T) {
 					b.Publish(1)
 				}
 			}
-		}()
+		})
 	}
 
 	// Subscribers drain until their channel is closed by Stop.
@@ -160,9 +158,7 @@ func TestBroker_ConcurrentPublishAndUnsubscribe(t *testing.T) {
 	// channels, maximizing the window for a send/close overlap.
 	const publishers = 4
 	for range publishers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -171,16 +167,14 @@ func TestBroker_ConcurrentPublishAndUnsubscribe(t *testing.T) {
 					b.Publish(1)
 				}
 			}
-		}()
+		})
 	}
 
 	// Subscribers repeatedly subscribe, drain a bit, then Unsubscribe — exactly
 	// the concurrent Publish + Unsubscribe pattern that used to race.
 	const subscribers = 6
 	for range subscribers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -205,7 +199,7 @@ func TestBroker_ConcurrentPublishAndUnsubscribe(t *testing.T) {
 				}
 				b.Unsubscribe(ch)
 			}
-		}()
+		})
 	}
 
 	time.Sleep(300 * time.Millisecond)
