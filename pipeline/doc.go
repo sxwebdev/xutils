@@ -149,8 +149,10 @@
 //		return pipeline.NoCompensate(fmt.Errorf("transient: %w", err))
 //	}
 //
-// The pipeline will fail without running compensation. The caller can then
-// re-invoke [Executor.Run] with the same state to retry from the failed step.
+// Compensation is skipped and the error (wrapping [ErrNoCompensate]) is returned
+// to the caller. The run is left non-terminal — its status stays
+// [RunStatusRunning] and [RunState.FailedStepPath] records the failed step — so
+// re-invoking [Executor.Run] with the same state retries from that step.
 //
 // # Versioning
 //

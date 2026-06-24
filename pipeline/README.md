@@ -119,6 +119,23 @@ pipeline.Action("allocate", allocateFn,
 
 Only steps with `WithCompensate` are rolled back. Steps without it are skipped during compensation.
 
+If compensation itself fails, `Run` returns `*ErrCompensationFailed` (wrapping both the original and the rollback error) and the run stays `compensating` so it can be resumed.
+
+## Skip compensation (retryable errors)
+
+For transient errors where the caller should retry the pipeline instead of rolling back, wrap the error with `NoCompensate`:
+
+```go
+func callAPI(ctx context.Context, data pipeline.DataAccessor) error {
+    if err := externalAPI(ctx); err != nil {
+        return pipeline.NoCompensate(fmt.Errorf("transient: %w", err))
+    }
+    return nil
+}
+```
+
+Compensation is skipped and the error (matchable with `errors.Is(err, pipeline.ErrNoCompensate)`) is returned to the caller. The run is left non-terminal — status stays `running` and `state.FailedStepPath` records the failed step — so re-invoking `Run` with the same state retries from that step.
+
 ## Data Passing
 
 Steps share data via `DataAccessor`. Data is JSON-serialized in snapshots.
@@ -160,11 +177,14 @@ Action steps support retry with optional exponential backoff:
 pipeline.WithRetry(
     5,              // max attempts
     time.Second,    // initial delay
-    true,           // exponential backoff (1s, 2s, 4s, 8s, 16s)
+    true,           // exponential backoff
 )
 ```
 
-Retries respect context cancellation.
+With backoff enabled, the delay doubles between attempts. There is no delay
+after the final attempt, so 5 attempts wait `1s, 2s, 4s, 8s` (four gaps).
+Retries respect context cancellation — a cancel during the wait aborts
+immediately and returns `context.Canceled` without rolling back.
 
 ## Versioning
 
