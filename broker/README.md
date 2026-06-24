@@ -5,9 +5,9 @@ Generic thread-safe pub/sub message broker with goroutine-based broadcasting.
 ## Features
 
 - **Generic** — `Broker[T]` works with any message type
-- **Thread-safe** — concurrent publish/subscribe/unsubscribe from any goroutine
+- **Thread-safe** — concurrent publish/subscribe/unsubscribe from any goroutine, including `Unsubscribe` racing `Publish` on the same channel (every channel close is serialized into the broker goroutine, so a send and a close never overlap)
 - **Non-blocking broadcast** — full subscriber buffers are skipped, never stall other consumers
-- **Panic recovery** — closed subscriber channels are handled gracefully
+- **Panic recovery** — a consumer that closes its own channel is handled gracefully
 - **Graceful shutdown** — `Stop()` waits for the broker goroutine to finish and closes all channels
 
 ## Installation
@@ -76,6 +76,16 @@ msg := <-ch // "late" (never "early")
 | Subscriber         | 8           |
 
 If a subscriber's buffer is full, the message is dropped for that subscriber. Other subscribers are not affected.
+
+## Unsubscribe
+
+`Unsubscribe(ch)` removes and closes a subscriber channel. It is safe to call concurrently with `Publish` on the same channel: the close is performed by the broker's own goroutine (the only sender on subscriber channels), so a send and a close never race.
+
+Because the close is delegated to that goroutine it is **asynchronous** — when `Unsubscribe` returns the channel may not be closed yet, and a message published just before the unsubscribe is processed may still be delivered. To observe the close, range over the channel or read until `ok == false`.
+
+`Unsubscribe` never blocks indefinitely: the request queue is buffered, and after `Stop` it returns immediately (the channel is already closed). Unsubscribing an unknown channel, or the same channel twice, is a safe no-op — never a double close.
+
+Closing a subscriber channel **yourself** (instead of calling `Unsubscribe`) while a publish is in flight races the broker's send; the broker recovers from the resulting panic and drops the subscriber, but prefer `Unsubscribe` to avoid the race entirely.
 
 ## Graceful Shutdown
 
