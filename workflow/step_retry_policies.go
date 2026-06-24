@@ -59,10 +59,14 @@ func RunWithLinear(sc *StepContext) error {
 }
 
 // RunWithBackoff runs a step function with a simple backoff retry mechanism.
+// The initial delay is the step's Timeout (default 1s), doubling on each retry.
 func RunWithBackoff(sc *StepContext) error {
 	var err error
 
-	backoff := 1 * time.Second
+	backoff := sc.Step.Timeout
+	if backoff <= 0 {
+		backoff = 1 * time.Second
+	}
 	for retries := 0; retries < sc.Step.MaxRetries || sc.Step.MaxRetries < 0; retries++ {
 		err = sc.Step.Func(sc)
 		if err == nil {

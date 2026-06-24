@@ -124,8 +124,9 @@
 //
 // Each step has a configurable retry policy. Built-in policies:
 //
-//   - [RunWithLinear] — fixed delay between retries (default)
-//   - [RunWithBackoff] — exponential backoff (1s, 2s, 4s, ...)
+//   - [RunWithLinear] — fixed delay (the step Timeout) between retries (default)
+//   - [RunWithBackoff] — exponential backoff starting from the step Timeout
+//     and doubling each retry (e.g. with a 1s timeout: 1s, 2s, 4s, ...)
 //
 // Configure via options or chainable setters:
 //
@@ -273,12 +274,14 @@
 //	wf.Stages = []*workflow.Stage{mainStage, compensationStage}
 //
 // On failure, the next call to [Workflow.Run] (after restoring from snapshot)
-// will execute from the compensation stage.
+// will execute from the compensation stage. Only step-execution failures route
+// to compensation; setup/validation errors (init, before hooks) surface from
+// Run unchanged.
 //
 // # Graceful Shutdown
 //
 // The workflow respects context cancellation. When the context is cancelled,
-// the workflow sets an internal stop flag and waits up to 9 seconds for the
+// the workflow sets an internal stop flag and waits up to 10 seconds for the
 // current step to finish. Retry sleeps also respond to cancellation:
 //
 //	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

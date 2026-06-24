@@ -83,7 +83,8 @@ Workflow
 stage, stageRef := workflow.NewStage("my_stage")
 step, stepRef := workflow.NewStep("my_step", myFn)
 
-// Navigate to a specific stage/step on resume
+// Navigate to a specific stage/step — from inside a running step (intermediate
+// steps/stages are marked skipped) or before a resume.
 wf.State.GoToStage(stageRef)
 wf.State.GoToStep(stepRef)
 ```
@@ -102,7 +103,8 @@ func myStep(sc *workflow.StepContext) error {
     step := sc.Step
 
     // Use as context.Context (StepContext embeds it)
-    resp, err := http.Get(sc, "https://example.com")
+    req, _ := http.NewRequestWithContext(sc, http.MethodGet, "https://example.com", nil)
+    resp, err := http.DefaultClient.Do(req)
 
     // Store result in step args (persisted in snapshots)
     step.State.SetArg("result_id", "abc-123")
@@ -129,11 +131,13 @@ workflow.NewStep("fetch_data", fetchFn,
 
 ### Exponential Backoff
 
-Retries with doubling delay (1s, 2s, 4s, 8s, ...):
+Retries with a doubling delay. The initial delay is the step `Timeout` (default
+1s); each retry doubles it (e.g. a 1s timeout gives 1s, 2s, 4s, ...):
 
 ```go
 workflow.NewStep("call_api", callApiFn,
     workflow.WithStepMaxRetries(5),
+    workflow.WithStepTimeout(time.Second), // initial backoff delay
     workflow.WithStepRetryPolicy(workflow.RunWithBackoff),
 )
 ```
@@ -188,6 +192,10 @@ Snapshots are taken automatically:
 - **After** each step completion (success or failure)
 - **On workflow failure** (before compensation)
 
+`GetSnapshot` and `GetJSONSnapshot` copy variables and step states, so they are
+safe to call concurrently with a running workflow (e.g. from a monitoring
+goroutine). A `Workflow` itself must not be `Run` concurrently with itself.
+
 ### Snapshot Structure
 
 ```go
@@ -220,7 +228,7 @@ wf := workflow.New(
 )
 ```
 
-On failure the workflow sets `NextStage`/`NextStep` to the compensation targets, saves a snapshot, and suppresses the error. The next `Run()` call continues from the compensation stage.
+When a **step** fails, the workflow sets `NextStage`/`NextStep` to the compensation targets, saves a snapshot, and suppresses the error. The next `Run()` call continues from the compensation stage. Setup/validation errors (a nil step, a duplicate name, a bad compensation reference, a failing `BeforeFn`) are **not** suppressed — they surface from `Run` as usual.
 
 ## Lifecycle Hooks
 
@@ -298,6 +306,17 @@ func conditionalStep(sc *workflow.StepContext) error {
     }
     return process(sc)
 }
+```
+
+### Finishing Early
+
+Set `Step.FinishWorkflow` to terminate the workflow after a step succeeds,
+skipping all remaining stages. Unlike returning `ErrExitWorkflow`, the workflow
+is marked completed and the step is recorded as `completed`:
+
+```go
+step, _ := workflow.NewStep("final_step", finalFn)
+step.SetStepFinishWorkflow(true) // or: step.FinishWorkflow = true
 ```
 
 ## Step Statuses

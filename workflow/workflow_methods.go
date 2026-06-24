@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"slices"
 
 	"github.com/sxwebdev/xutils/loggerutil"
@@ -89,25 +90,41 @@ func (w *Workflow) SetSnapshotFn(fn func(ctx context.Context, w *Workflow, snaps
 // Logger returns the logger for the workflow.
 func (w *Workflow) Logger() loggerutil.Logger { return w.logger }
 
-// StepStates returns all step states with valid statuses.
+// StepStates returns deep copies of all step states with valid statuses. Copies
+// (rather than the live pointers) are returned so the result can be read or
+// marshaled without racing the running workflow.
 func (w *Workflow) StepStates() []*StepState {
 	states := []*StepState{}
 	for _, stage := range w.Stages {
 		for _, step := range stage.Steps {
-			if step.State.Status.Valid() {
-				states = append(states, step.State)
+			if step.State == nil {
+				continue
+			}
+			st := step.State.clone()
+			if st.Status.Valid() {
+				states = append(states, st)
 			}
 		}
 	}
 	return states
 }
 
-// GetSnapshot returns a snapshot of the current workflow state.
+// GetSnapshot returns a snapshot of the current workflow state. Step states and
+// the variable map are copied so the snapshot is safe to read concurrently with
+// the running workflow.
 func (w *Workflow) GetSnapshot() Snapshot {
+	w.varsMu.RLock()
+	var vars map[string]any
+	if w.vars != nil {
+		vars = make(map[string]any, len(w.vars))
+		maps.Copy(vars, w.vars)
+	}
+	w.varsMu.RUnlock()
+
 	return Snapshot{
 		StepsStates:   w.StepStates(),
 		WorkflowState: w.State,
-		Vars:          w.vars,
+		Vars:          vars,
 	}
 }
 

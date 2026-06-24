@@ -92,7 +92,7 @@ func WithCompensationStage(stageRef StageRef, stepRef StepRef) WorkflowOption {
 }
 
 // WithShutdownTimeout sets the maximum time to wait for a graceful shutdown
-// after context cancellation. Default is 9 seconds.
+// after context cancellation. Default is 10 seconds.
 func WithShutdownTimeout(d time.Duration) WorkflowOption {
 	return func(w *Workflow) {
 		w.shutdownTimeout = d

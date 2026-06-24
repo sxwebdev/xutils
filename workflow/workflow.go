@@ -44,9 +44,13 @@ type Workflow struct {
 
 	logger loggerutil.Logger
 
-	isStopped       atomic.Bool
-	prevStep        *Step
-	shutdownTimeout time.Duration
+	isStopped atomic.Bool
+	// executionStarted is set once init and the before hooks pass, i.e. step
+	// execution actually began. Compensation routing is gated on it so a
+	// setup/validation failure is not swallowed by the compensation mechanism.
+	executionStarted atomic.Bool
+	prevStep         *Step
+	shutdownTimeout  time.Duration
 
 	isSkipError bool
 
@@ -94,8 +98,9 @@ func (w *Workflow) Run(ctx context.Context) (err error) {
 			}
 		}
 
-		// apply automatic compensation if configured
-		if w.compensationStageRef != nil && w.compensationStepRef != nil {
+		// apply automatic compensation if configured — but only for failures that
+		// occurred during step execution, not setup/validation errors.
+		if w.compensationStageRef != nil && w.compensationStepRef != nil && w.executionStarted.Load() {
 			w.State.SetError(err)
 			w.State.GoToStage(*w.compensationStageRef)
 			w.State.GoToStep(*w.compensationStepRef)
@@ -141,6 +146,9 @@ func (w *Workflow) Run(ctx context.Context) (err error) {
 }
 
 func (w *Workflow) execute(ctx context.Context) (err error) {
+	// Reset per-run so a failed setup on a later Run is not gated by a prior run.
+	w.executionStarted.Store(false)
+
 	// initialize the workflow
 	if err := w.init(); err != nil {
 		return fmt.Errorf("workflow init: %w", err)
@@ -156,6 +164,9 @@ func (w *Workflow) execute(ctx context.Context) (err error) {
 			return fmt.Errorf("workflow before: %w", err)
 		}
 	}
+
+	// Setup succeeded; from here failures route to compensation when configured.
+	w.executionStarted.Store(true)
 
 	var stepHandlerError error
 	for _, stage := range w.Stages {
@@ -233,6 +244,9 @@ func (w *Workflow) init() error {
 				return fmt.Errorf("step [%s] in stage [%s] has no function", step.Name, stage.Name)
 			}
 
+			// Defensive: setDefaultValues above always assigns a retry policy, so
+			// this is unreachable in practice — kept as a guard against future
+			// reordering of init.
 			if step.RetryPolicy == nil {
 				return fmt.Errorf("step [%s] in stage [%s] has no retry policy", step.Name, stage.Name)
 			}
@@ -360,21 +374,25 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 		w.State.NextStep = ""
 	}
 
+	// stepSucceeded records that the step's own work (and its hooks) finished
+	// successfully, even if we then return a control-flow signal (FinishWorkflow
+	// returns ErrBreakStages but the step itself completed).
+	var stepSucceeded bool
+
 	step.State.SetStartTime(time.Now())
 	defer func() {
 		step.State.SetEndTime(time.Now())
-		if err == nil {
+		switch {
+		case err == nil || stepSucceeded:
 			step.State.SetError(nil)
 			step.State.SetStatus(StepStatusCompleted)
-		}
-
-		if err != nil {
-			if errors.Is(err, ErrSkipStep) || errors.Is(err, ErrSkipStage) || errors.Is(err, ErrBreakStages) {
-				step.State.SetStatus(StepStatusSkipped)
-			} else {
-				step.State.SetStatus(StepStatusFailed)
-				step.State.SetError(err)
-			}
+		case isControlFlowError(err):
+			// The step returned a control-flow sentinel (skip/break/exit)
+			// instead of doing work — it was not a failure.
+			step.State.SetStatus(StepStatusSkipped)
+		default:
+			step.State.SetStatus(StepStatusFailed)
+			step.State.SetError(err)
 		}
 
 		// save snapshot after step completes (success or failure)
@@ -445,6 +463,10 @@ func (w *Workflow) handleStep(ctx context.Context, stage *Stage, step *Step) (er
 	if err != nil {
 		return fmt.Errorf("stage [%s] failed on step [%s]: %w", stage.Name, step.Name, err)
 	}
+
+	// The step's own work succeeded; mark it so the deferred status logic records
+	// Completed even when FinishWorkflow makes us return a control-flow break.
+	stepSucceeded = true
 
 	if step.FinishWorkflow {
 		return ErrBreakStages

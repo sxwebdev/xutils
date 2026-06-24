@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"maps"
 	"sync"
 	"time"
 )
@@ -37,7 +38,9 @@ func NewStepState() *StepState {
 // SetPreviousStage sets the previous stage for the step.
 func (s *StepState) SetPreviousStage(stage string) *StepState {
 	if stage != "" {
+		s.mu.Lock()
 		s.PreviousStage = &stage
+		s.mu.Unlock()
 	}
 	return s
 }
@@ -45,27 +48,35 @@ func (s *StepState) SetPreviousStage(stage string) *StepState {
 // SetPreviousStep sets the previous step for the step.
 func (s *StepState) SetPreviousStep(step string) *StepState {
 	if step != "" {
+		s.mu.Lock()
 		s.PreviousStep = &step
+		s.mu.Unlock()
 	}
 	return s
 }
 
 // SetCurrentStage sets the current stage for the step.
 func (s *StepState) SetCurrentStage(stage string) *StepState {
+	s.mu.Lock()
 	s.CurrentStage = stage
+	s.mu.Unlock()
 	return s
 }
 
 // SetCurrentStep sets the current step for the step.
 func (s *StepState) SetCurrentStep(step string) *StepState {
+	s.mu.Lock()
 	s.CurrentStep = step
+	s.mu.Unlock()
 	return s
 }
 
 // SetNextStage sets the next stage for the step.
 func (s *StepState) SetNextStage(stage string) *StepState {
 	if stage != "" {
+		s.mu.Lock()
 		s.NextStage = &stage
+		s.mu.Unlock()
 	}
 	return s
 }
@@ -73,7 +84,9 @@ func (s *StepState) SetNextStage(stage string) *StepState {
 // SetNextStep sets the next step for the step.
 func (s *StepState) SetNextStep(step string) *StepState {
 	if step != "" {
+		s.mu.Lock()
 		s.NextStep = &step
+		s.mu.Unlock()
 	}
 	return s
 }
@@ -81,7 +94,9 @@ func (s *StepState) SetNextStep(step string) *StepState {
 // SetStartTime sets the start time for the step.
 func (s *StepState) SetStartTime(t time.Time) *StepState {
 	if !t.IsZero() {
+		s.mu.Lock()
 		s.StartTime = &t
+		s.mu.Unlock()
 	}
 	return s
 }
@@ -89,25 +104,69 @@ func (s *StepState) SetStartTime(t time.Time) *StepState {
 // SetEndTime sets the end time for the step.
 func (s *StepState) SetEndTime(t time.Time) *StepState {
 	if !t.IsZero() {
+		s.mu.Lock()
 		s.EndTime = &t
+		s.mu.Unlock()
 	}
 	return s
 }
 
 // SetStatus sets the status for the step.
 func (s *StepState) SetStatus(status StepStatus) *StepState {
+	s.mu.Lock()
 	s.Status = status
+	s.mu.Unlock()
 	return s
 }
 
 // SetError sets the error for the step.
 func (s *StepState) SetError(err error) *StepState {
+	s.mu.Lock()
 	if err == nil {
 		s.Error = ""
 	} else {
 		s.Error = err.Error()
 	}
+	s.mu.Unlock()
 	return s
+}
+
+// clone returns a deep copy of the step state taken under the read lock, so a
+// snapshot can be marshaled without racing concurrent mutations of the live
+// state.
+func (s *StepState) clone() *StepState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	c := &StepState{
+		CurrentStage: s.CurrentStage,
+		CurrentStep:  s.CurrentStep,
+		StartTime:    s.StartTime,
+		EndTime:      s.EndTime,
+		Status:       s.Status,
+		Error:        s.Error,
+	}
+	if s.PreviousStage != nil {
+		v := *s.PreviousStage
+		c.PreviousStage = &v
+	}
+	if s.PreviousStep != nil {
+		v := *s.PreviousStep
+		c.PreviousStep = &v
+	}
+	if s.NextStage != nil {
+		v := *s.NextStage
+		c.NextStage = &v
+	}
+	if s.NextStep != nil {
+		v := *s.NextStep
+		c.NextStep = &v
+	}
+	if s.Args != nil {
+		c.Args = make(map[string]any, len(s.Args))
+		maps.Copy(c.Args, s.Args)
+	}
+	return c
 }
 
 // SetArgs sets the arguments for the step.

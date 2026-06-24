@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,22 +43,6 @@ func simpleStep(_ *workflow.StepContext) error {
 	return nil
 }
 
-func stepWithErr(sc *workflow.StepContext) error {
-	fmt.Printf("Executing step: %s\n", sc.Step.Name)
-	if rand.IntN(100) > 1 { //nolint:gosec
-		return errors.New("step 1.2 error")
-	}
-	return nil
-}
-
-func stepWithErr2(sc *workflow.StepContext) error {
-	fmt.Printf("Executing step: %s\n", sc.Step.Name)
-	if rand.IntN(100) > 50 { //nolint:gosec
-		return errors.New("step 2.1 error")
-	}
-	return nil
-}
-
 func mustStep(name string, fn workflow.StepFunc, opts ...workflow.StepOption) *workflow.Step {
 	s, _ := workflow.NewStep(name, fn, opts...)
 	return s
@@ -73,29 +56,39 @@ func mustStage(name string, opts ...workflow.StageOption) *workflow.Stage {
 func TestWorflow(t *testing.T) {
 	l := loggerutil.NewTestLogger()
 
+	// Deterministic transient failures: each flaky step fails a fixed number of
+	// times, then succeeds — so the test verifies the retry path without relying
+	// on randomness (and without slow sleeps).
+	var step12Attempts, step21Attempts int
+
+	flaky := func(counter *int, failUntil int, msg string) workflow.StepFunc {
+		return func(_ *workflow.StepContext) error {
+			*counter++
+			if *counter < failUntil {
+				return errors.New(msg)
+			}
+			return nil
+		}
+	}
+
 	wf := workflow.New(
 		workflow.WithName("Test Workflow"),
 		workflow.WithLogger(l),
-		workflow.WithBeforeFn(func(_ context.Context, w *workflow.Workflow) error {
-			fmt.Printf("Starting workflow: %s\n\n", w.Name)
-			return nil
-		}),
-		workflow.WithAfterFn(func(_ context.Context, w *workflow.Workflow) error {
-			fmt.Printf("\nWorkflow %s completed\n", w.Name)
-			return nil
-		}),
+		workflow.WithBeforeFn(func(_ context.Context, _ *workflow.Workflow) error { return nil }),
+		workflow.WithAfterFn(func(_ context.Context, _ *workflow.Workflow) error { return nil }),
 	)
 
 	wf.Stages = []*workflow.Stage{
 		{
 			Name: "Stage 1",
 			Steps: []*workflow.Step{
-				mustStep("Step 1.1", simpleStep, workflow.WithStepBeforeFn(stepBeforeStart), workflow.WithStepAfterFn(stepAfterComplete)),
+				mustStep("Step 1.1", func(_ *workflow.StepContext) error { return nil },
+					workflow.WithStepBeforeFn(stepBeforeStart), workflow.WithStepAfterFn(stepAfterComplete)),
 				{
 					Name:       "Step 1.2",
-					Func:       stepWithErr,
-					Timeout:    time.Millisecond * 10,
-					MaxRetries: -1,
+					Func:       flaky(&step12Attempts, 3, "step 1.2 transient"),
+					Timeout:    time.Millisecond,
+					MaxRetries: 5,
 					BeforeFn:   stepBeforeStart,
 					AfterFn:    stepAfterComplete,
 				},
@@ -108,13 +101,14 @@ func TestWorflow(t *testing.T) {
 			Steps: []*workflow.Step{
 				{
 					Name:       "Step 2.1",
-					Func:       stepWithErr2,
-					Timeout:    time.Millisecond * 10,
-					MaxRetries: -1,
+					Func:       flaky(&step21Attempts, 2, "step 2.1 transient"),
+					Timeout:    time.Millisecond,
+					MaxRetries: 5,
 					BeforeFn:   stepBeforeStart,
 					AfterFn:    stepAfterComplete,
 				},
-				mustStep("Step 2.2", simpleStep, workflow.WithStepBeforeFn(stepBeforeStart), workflow.WithStepAfterFn(stepAfterComplete)),
+				mustStep("Step 2.2", func(_ *workflow.StepContext) error { return nil },
+					workflow.WithStepBeforeFn(stepBeforeStart), workflow.WithStepAfterFn(stepAfterComplete)),
 			},
 			BeforeFn: stageBeforeStart,
 			AfterFn:  stageAfterComplete,
@@ -122,8 +116,10 @@ func TestWorflow(t *testing.T) {
 		mustStage("Stage 3", workflow.WithStageBeforeFn(stageBeforeStart), workflow.WithStageAfterFn(stageAfterComplete)),
 	}
 
-	err := wf.Run(context.Background())
-	require.NoError(t, err)
+	require.NoError(t, wf.Run(t.Context()))
+	require.Equal(t, 3, step12Attempts, "step 1.2 retried until its 3rd attempt")
+	require.Equal(t, 2, step21Attempts, "step 2.1 retried until its 2nd attempt")
+	require.True(t, wf.State.IsCompleted)
 }
 
 var simpleWorkflowSnapshot = `{
