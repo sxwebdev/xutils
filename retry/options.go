@@ -37,6 +37,15 @@ func WithDelay(delay time.Duration) Option {
 	}
 }
 
+// WithMaxDelay caps the delay between attempts. It is most useful with
+// PolicyBackoff to bound the exponentially growing delay. Zero (the default)
+// means no cap.
+func WithMaxDelay(maxDelay time.Duration) Option {
+	return func(r *Retry) {
+		r.maxDelay = maxDelay
+	}
+}
+
 // WithContext sets the ctx for Infinite policy retry
 func WithContext(ctx context.Context) Option {
 	return func(r *Retry) {
@@ -79,6 +88,12 @@ func (r *Retry) SetPolicy(policy Policy) *Retry {
 // SetDelay sets the delay between retries
 func (r *Retry) SetDelay(delay time.Duration) *Retry {
 	r.delay = delay
+	return r
+}
+
+// SetMaxDelay caps the delay between attempts (see WithMaxDelay)
+func (r *Retry) SetMaxDelay(maxDelay time.Duration) *Retry {
+	r.maxDelay = maxDelay
 	return r
 }
 

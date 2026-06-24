@@ -33,14 +33,16 @@
 //	)
 //	// delays: 2s, 2s, 2s, 2s, 2s
 //
-// Backoff — delay doubles on each attempt (delay * 2^(attempt-1)):
+// Backoff — delay doubles on each attempt (delay * 2^(attempt-1)). Use
+// [WithMaxDelay] to bound the exponential growth:
 //
 //	retry.New(
 //		retry.WithPolicy(retry.PolicyBackoff),
 //		retry.WithDelay(time.Second),
+//		retry.WithMaxDelay(10*time.Second),
 //		retry.WithMaxAttempts(5),
 //	)
-//	// delays: 1s, 2s, 4s, 8s, 16s
+//	// delays: 1s, 2s, 4s, 8s, 10s (capped)
 //
 // Infinite — retries until context cancellation or [ErrExit]:
 //
@@ -66,9 +68,37 @@
 //		return nil
 //	})
 //
+// # Error Handling
+//
+// When all attempts are exhausted (for [PolicyLinear] and [PolicyBackoff]),
+// [Do] returns an [*Error] that wraps the last error returned by the function.
+// The original error stays reachable through the standard helpers:
+//
+//	err := r.Do(doWork)
+//
+//	// match the original cause
+//	if errors.Is(err, sql.ErrNoRows) { ... }
+//
+//	// read the retry metadata (policy, attempts) and the cause
+//	if rerr, ok := errors.AsType[*retry.Error](err); ok {
+//		log.Printf("policy=%s attempts=%d cause=%v", rerr.Policy, rerr.Attempts, rerr.Err)
+//	}
+//
+// [PolicyInfinite] never returns an [*Error]: it returns nil on success, the
+// context error on cancellation, or the [ErrExit]-wrapping error on early exit.
+// An error wrapping [ErrExit] is likewise returned unchanged by all policies.
+//
+// # Context Cancellation
+//
+// When a context is configured with [WithContext], cancellation interrupts the
+// wait between attempts for every policy (not just [PolicyInfinite]); [Do] then
+// returns the context error. Without a context the wait is a plain sleep that
+// cannot be cancelled.
+//
 // # Callbacks
 //
-// Optional callbacks are invoked on each failure or on final success:
+// Optional callbacks are invoked on each failure or on final success. The
+// onFailed callback also fires for an attempt that returns [ErrExit]:
 //
 //	retry.New(
 //		retry.WithOnFailedFn(func() {
@@ -90,11 +120,12 @@
 //
 // # Options
 //
-//   - [WithContext] — set context (required for [PolicyInfinite])
-//   - [WithLogger] — set a structured logger
-//   - [WithMaxAttempts] — maximum number of attempts (default: 5)
+//   - [WithContext] — set context (required for [PolicyInfinite]; enables cancellation for all policies)
+//   - [WithLogger] — set a logger for retry progress messages
+//   - [WithMaxAttempts] — maximum number of attempts (default: 5; must be >= 1)
 //   - [WithPolicy] — retry strategy (default: [PolicyBackoff])
 //   - [WithDelay] — initial delay between attempts (default: 1s)
+//   - [WithMaxDelay] — upper bound for the delay (default: 0, no cap)
 //   - [WithOnFailedFn] — callback invoked on each failed attempt
 //   - [WithOnSuccessFn] — callback invoked on success
 package retry

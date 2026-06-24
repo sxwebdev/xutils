@@ -6,8 +6,9 @@ Flexible retry mechanism with linear, exponential backoff, and infinite retry po
 
 - **Three policies** — linear, exponential backoff, infinite
 - **Early exit** — return `ErrExit` to stop retries on non-retryable errors
+- **Error inspection** — failures are wrapped in `*retry.Error` carrying policy, attempts and the original cause
 - **Callbacks** — `OnFailedFn` and `OnSuccessFn` for observability
-- **Context support** — required for infinite policy, respects cancellation
+- **Context support** — cancellation interrupts the wait between attempts for any policy (required for infinite)
 - **Chainable API** — functional options and setter methods
 
 ## Installation
@@ -58,6 +59,18 @@ retry.New(
 // delays: 1s, 2s, 4s, 8s, 16s
 ```
 
+Use `WithMaxDelay` to cap the exponential growth:
+
+```go
+retry.New(
+    retry.WithPolicy(retry.PolicyBackoff),
+    retry.WithDelay(time.Second),
+    retry.WithMaxDelay(10*time.Second),
+    retry.WithMaxAttempts(5),
+)
+// delays: 1s, 2s, 4s, 8s, 10s (capped)
+```
+
 ### Infinite
 
 Retries forever until context cancellation or `ErrExit`:
@@ -86,6 +99,40 @@ err := r.Do(func() error {
     return nil
 })
 ```
+
+## Error Handling
+
+When all attempts are exhausted (linear and backoff policies), `Do` returns an
+`*retry.Error` that wraps the last error from the function. The original error
+stays reachable through the standard helpers:
+
+```go
+err := r.Do(doWork)
+
+// match the original cause
+if errors.Is(err, sql.ErrNoRows) {
+    // ...
+}
+
+// read retry metadata (policy, attempts) and the cause
+if rerr, ok := errors.AsType[*retry.Error](err); ok {
+    log.Printf("policy=%s attempts=%d cause=%v", rerr.Policy, rerr.Attempts, rerr.Err)
+}
+```
+
+`retry.Error` fields:
+
+| Field      | Description                                 |
+| ---------- | ------------------------------------------- |
+| `Policy`   | Policy used for the run                     |
+| `Attempts` | Number of attempts performed                |
+| `Err`      | Last error returned by the retried function |
+
+Notes:
+
+- The infinite policy never returns `*retry.Error` — it returns `nil`, the context error on cancellation, or the `ErrExit`-wrapping error.
+- An error wrapping `ErrExit` is returned unchanged by all policies, so `errors.Is(err, retry.ErrExit)` holds.
+- `ErrRetry` is a convenience sentinel for an ordinary retryable failure; it has no special handling — returning your own error works the same way.
 
 ## Callbacks
 
@@ -118,15 +165,17 @@ r := retry.New().
 | `MaxAttempts` | 5               |
 | `Policy`      | `PolicyBackoff` |
 | `Delay`       | 1s              |
+| `MaxDelay`    | 0 (no cap)      |
 
 ## Options
 
 | Option            | Description                                 |
 | ----------------- | ------------------------------------------- |
 | `WithContext`     | Set context (required for `PolicyInfinite`) |
-| `WithLogger`      | Set a structured logger                     |
-| `WithMaxAttempts` | Maximum number of attempts                  |
+| `WithLogger`      | Set a logger for retry progress messages    |
+| `WithMaxAttempts` | Maximum number of attempts (must be >= 1)   |
 | `WithPolicy`      | Retry strategy                              |
 | `WithDelay`       | Initial delay between attempts              |
+| `WithMaxDelay`    | Upper bound for the delay (0 = no cap)      |
 | `WithOnFailedFn`  | Callback on each failed attempt             |
 | `WithOnSuccessFn` | Callback on success                         |
