@@ -109,6 +109,46 @@ func TestJSONField_Scan(t *testing.T) {
 		var j dbutil.JSONField
 		require.Error(t, j.Scan(42))
 	})
+
+	// Regression: Scan must copy the driver's byte buffer, not alias it. Many
+	// drivers reuse the same backing array for the next row, so retaining it
+	// would silently corrupt the scanned value.
+	t.Run("copies driver buffer instead of aliasing", func(t *testing.T) {
+		buf := []byte(`{"a":1}`)
+		var j dbutil.JSONField
+		require.NoError(t, j.Scan(buf))
+		// Simulate the driver reusing its buffer for the next row.
+		copy(buf, []byte(`{"b":2}`))
+		assert.JSONEq(t, `{"a":1}`, string(j))
+	})
+
+	// The whitespace trim must also not alias: a []byte with surrounding
+	// whitespace yields a sub-slice from TrimSpace that still points into the
+	// driver buffer unless copied.
+	t.Run("copies even after trimming whitespace", func(t *testing.T) {
+		buf := []byte(`  {"a":1}  `)
+		var j dbutil.JSONField
+		require.NoError(t, j.Scan(buf))
+		copy(buf, []byte(`xx{"b":2}xx`))
+		assert.JSONEq(t, `{"a":1}`, string(j))
+	})
+}
+
+// Round-trip: a value produced by Value() must scan back to an equal JSONField.
+func TestJSONField_ValueScanRoundTrip(t *testing.T) {
+	orig := dbutil.JSONField(`{"a":1,"nested":{"msg":"hello world"}}`)
+
+	v, err := orig.Value()
+	require.NoError(t, err)
+
+	var back dbutil.JSONField
+	// Value yields a string; exercise both the string and []byte driver paths.
+	require.NoError(t, back.Scan(v))
+	assert.JSONEq(t, string(orig), string(back))
+
+	var backBytes dbutil.JSONField
+	require.NoError(t, backBytes.Scan([]byte(v.(string))))
+	assert.JSONEq(t, string(orig), string(backBytes))
 }
 
 func TestJSONField_Value(t *testing.T) {

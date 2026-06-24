@@ -9,7 +9,7 @@ import (
 
 type JSONField json.RawMessage
 
-// Mashals JSONField to a JSON string
+// Marshals JSONField to a JSON string
 func (j JSONField) MarshalJSON() ([]byte, error) {
 	if len(j) == 0 {
 		return []byte("null"), nil
@@ -17,7 +17,10 @@ func (j JSONField) MarshalJSON() ([]byte, error) {
 	return j, nil
 }
 
-// Unmarshals a JSON string to JSONField
+// Unmarshals a JSON string to JSONField. Like [encoding/json.RawMessage], it
+// stores the raw bytes verbatim and does NOT validate them — unlike Scan and
+// Value, which reject invalid JSON. Bytes set here are validated later by Value
+// when written to the database.
 func (j *JSONField) UnmarshalJSON(data []byte) error {
 	if j == nil {
 		return fmt.Errorf("JSONField: UnmarshalJSON on nil pointer")
