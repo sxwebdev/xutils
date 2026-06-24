@@ -1,0 +1,55 @@
+# xutils
+
+Collection of Go utility packages (Go 1.26+). Each top-level directory is an
+independent package.
+
+## Testing
+
+Write tests that verify **behavior**, not the implementation. Concretely:
+
+- **Test the contract, not the code.** Assertions must follow from the public
+  promise. If a refactor that keeps behavior identical breaks a test, the test
+  was fitted to the code — fix the test.
+- **Count real effects, not self-reported ones.** Assert on observable behavior
+  (number of times a callback ran, attempts made, side effects) rather than on
+  a field the code sets unconditionally. A counter that proves "ran exactly N
+  times" catches off-by-one bugs; re-checking a value the code copied from input
+  does not.
+- **Assert both directions on timing/ranges.** Use a lower _and_ an upper bound
+  so the test catches both "too little" (e.g. delay not applied) and "too much"
+  (e.g. delay grew when it shouldn't). A single upper bound hides whole classes
+  of bugs.
+- **Cover the full surface:** success, success-after-failures, exhaustion,
+  early-exit/short-circuit, invalid input (nil/zero/negative), every policy or
+  mode, and all error branches. Table-drive repetitive cases instead of copying
+  near-identical tests.
+- **Use `t.Context()`** as the base context in every test. Derive cancellable
+  or deadline contexts from it (`context.WithCancel(t.Context())`,
+  `context.WithTimeout(t.Context(), …)`) — never `context.Background()`. It is
+  auto-cancelled at test end, preventing leaks.
+- **Verify errors by identity, not text.** Use `errors.Is` / `errors.As` /
+  `errors.AsType` to match wrapped causes and custom error types. Check the
+  exact message string at most once, only where the format is part of the
+  contract.
+- **Run with `-race`** for anything that spawns goroutines or touches shared
+  state.
+
+### Coverage
+
+- Keep statement coverage **≥ 95% per package**.
+- Check it before finishing:
+  ```bash
+  go test ./<pkg>/ -count=1 -race -coverprofile=cover.out
+  go tool cover -func=cover.out | tail -1
+  ```
+- The only acceptable gaps are defensive branches that cannot be triggered
+  without unreasonable cost (e.g. an integer-overflow guard that would require a
+  multi-day sleep). Note such exclusions rather than padding with tautological
+  tests.
+
+### Before committing
+
+```bash
+go vet ./...
+go test ./... -count=1 -race
+```
