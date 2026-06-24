@@ -11,6 +11,14 @@ func FormatNumberWithPrecision(number string, precision int) string {
 		return number
 	}
 
+	// Preserve a single leading minus sign and format the magnitude separately,
+	// so the sign char is never treated as a digit.
+	sign := ""
+	if strings.HasPrefix(number, "-") {
+		sign = "-"
+		number = number[1:]
+	}
+
 	// Removing a possible point in the input line
 	number = strings.ReplaceAll(number, ".", "")
 
@@ -21,7 +29,7 @@ func FormatNumberWithPrecision(number string, precision int) string {
 
 	// Insert a point
 	decimalIndex := len(number) - precision
-	formattedNumber := number[:decimalIndex] + "." + number[decimalIndex:]
+	formattedNumber := sign + number[:decimalIndex] + "." + number[decimalIndex:]
 
 	return formattedNumber
 }

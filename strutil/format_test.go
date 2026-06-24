@@ -24,6 +24,17 @@ func TestFormatNumberWithPrecision(t *testing.T) {
 		{"trailing-zero value", "100", 2, "1.00"},
 		{"strips existing dots", "1.5", 2, "0.15"},
 		{"large precision", "12345", 7, "0.0012345"},
+		// Negative numbers: the sign must be preserved, not treated as a digit.
+		{"negative pad single digit", "-5", 2, "-0.05"},
+		{"negative with dot", "-5.5", 2, "-0.55"},
+		{"negative magnitude below one", "-0.5", 3, "-0.005"},
+		{"negative no padding needed", "-123", 2, "-1.23"},
+		{"negative precision returns input with sign", "-5", -1, "-5"},
+		// Degenerate inputs must not panic and produce a sane result.
+		{"empty input pads to zero", "", 2, "0.00"},
+		{"lone minus sign", "-", 2, "-0.00"},
+		{"minus dot only", "-.", 2, "-0.00"},
+		{"dot only", ".", 2, "0.00"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
