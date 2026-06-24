@@ -5,6 +5,19 @@ independent package.
 
 ## Testing
 
+**The goal of testing is to find real bugs, not to make tests pass.** A green
+suite proves nothing on its own — it may just be fitted to the current code.
+
+- **Trust nothing; verify against the code.** Existing tests, comments, and docs
+  can all be wrong or stale. Read the implementation and confirm what it actually
+  does before relying on any claim about it.
+- **Treat every doubt as a red flag.** A surprising result, an odd assertion, a
+  test you had to "adjust" to make pass — stop and re-check the code. The
+  surprise is usually a real bug, not a test that needs tweaking.
+- **Prove a test catches its bug.** When a test guards a specific bug, confirm it
+  fails against the broken code (e.g. temporarily revert the fix), then restore.
+  A test that passes both ways guards nothing.
+
 Write tests that verify **behavior**, not the implementation. Concretely:
 
 - **Test the contract, not the code.** Assertions must follow from the public
@@ -47,7 +60,18 @@ Write tests that verify **behavior**, not the implementation. Concretely:
   multi-day sleep). Note such exclusions rather than padding with tautological
   tests.
 
-### Before committing
+## Documentation
+
+Documentation must always match the code. Treat it like tests — it can be stale,
+so never trust it over the implementation.
+
+- When doc comments, `doc.go`, or `README.md` contradict the code, the code is
+  the source of truth — but the docs are then a bug that must be fixed.
+- Do **not** rewrite docs to match the code silently. First confirm whether the
+  code or the doc reflects the intended behavior, then **ask the developer**
+  before changing it — the contradiction may mean the code is wrong, not the doc.
+
+## Before committing
 
 ```bash
 go vet ./...
