@@ -14,9 +14,17 @@ type Loopper struct {
 	options Options
 
 	running atomic.Bool
-	stopped atomic.Bool
-	wg      sync.WaitGroup
-	cancel  context.CancelFunc
+
+	// mu guards started/stopped and serializes them with wg.Add, so that no
+	// wg.Add can happen once Stop has marked the loop stopped. Without this,
+	// a Trigger racing Stop/Wait could Add after Wait returned and panic with
+	// "WaitGroup is reused before previous Wait has returned".
+	mu      sync.Mutex
+	started bool
+	stopped bool
+
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
 
 	fn func(context.Context)
 }
@@ -43,15 +51,27 @@ func New(fn func(context.Context), opts ...Option) *Loopper {
 }
 
 func (l *Loopper) Start(parent context.Context) {
+	l.mu.Lock()
+	if l.started || l.stopped {
+		// Already started, or stopped before ever starting: do nothing rather
+		// than leak a second ticker goroutine and overwrite l.cancel.
+		l.mu.Unlock()
+		return
+	}
+	l.started = true
 	ctx, cancel := context.WithCancel(parent)
 	l.cancel = cancel
+	l.wg.Add(1)
+	l.mu.Unlock()
 
-	// Run immediately if leading is true
+	// Run immediately if leading is true.
 	if l.options.leading {
 		l.tryRun(ctx, l.fn)
 	}
 
-	l.wg.Go(func() {
+	go func() {
+		defer l.wg.Done()
+
 		t := time.NewTicker(l.options.period)
 		defer t.Stop()
 
@@ -60,13 +80,12 @@ func (l *Loopper) Start(parent context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if l.stopped.Load() {
-					return
-				}
+				// tryRun is a no-op once stopped, so the cancelled ctx (next
+				// iteration) is what actually ends the goroutine.
 				l.tryRun(ctx, l.fn)
 			}
 		}
-	})
+	}()
 }
 
 // Trigger triggers the loop to run the provided function immediately if not already running
@@ -76,11 +95,17 @@ func (l *Loopper) Trigger(ctx context.Context) bool {
 
 // Stop stops the loop
 func (l *Loopper) Stop() {
-	if l.stopped.Swap(true) {
+	l.mu.Lock()
+	if l.stopped {
+		l.mu.Unlock()
 		return
 	}
-	if l.cancel != nil {
-		l.cancel()
+	l.stopped = true
+	cancel := l.cancel
+	l.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -91,14 +116,24 @@ func (l *Loopper) Wait() {
 
 // tryRun tries to run a function within the loop's context
 func (l *Loopper) tryRun(parent context.Context, fn func(context.Context)) bool {
-	if l.stopped.Load() {
-		return false
-	}
+	// Take the overlap flag first (cheap, lock-free) so the common "already
+	// running" rejection does not contend on the mutex.
 	if !l.running.CompareAndSwap(false, true) {
 		return false
 	}
 
-	l.wg.Go(func() {
+	// Serialize the stopped check with wg.Add so a concurrent Stop can never
+	// let an Add slip through after Wait has started.
+	l.mu.Lock()
+	if l.stopped {
+		l.mu.Unlock()
+		l.running.Store(false)
+		return false
+	}
+	l.wg.Add(1)
+	l.mu.Unlock()
+
+	go func() {
 		now := time.Now()
 		defer func() {
 			if r := recover(); r != nil {
@@ -106,6 +141,7 @@ func (l *Loopper) tryRun(parent context.Context, fn func(context.Context)) bool 
 			}
 			l.running.Store(false)
 			l.options.logger.Debugf("loop iteration took %s", time.Since(now))
+			l.wg.Done()
 		}()
 
 		ctx := parent
@@ -116,7 +152,7 @@ func (l *Loopper) tryRun(parent context.Context, fn func(context.Context)) bool 
 		}
 
 		fn(ctx)
-	})
+	}()
 
 	return true
 }

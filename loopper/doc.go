@@ -36,7 +36,9 @@
 // # Manual Trigger
 //
 // [Loopper.Trigger] forces an immediate execution outside the normal schedule.
-// It returns true if the task was started, or false if it was already running:
+// It returns true if the task was started, or false if it was already running
+// (or the loop is stopped). It is safe to call from any goroutine, including
+// concurrently with [Loopper.Stop] and [Loopper.Wait]:
 //
 //	started := l.Trigger(ctx)
 //
@@ -53,6 +55,9 @@
 //
 //	l.Stop()  // stop scheduling new ticks
 //	l.Wait()  // wait for current execution to finish
+//
+// [Loopper.Start] is idempotent — a second call is a no-op. [Loopper.Stop] is
+// idempotent and safe to call even if Start was never called.
 //
 // # Panic Recovery
 //
