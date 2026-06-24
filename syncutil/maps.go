@@ -91,6 +91,10 @@ func (m *Map[K, V]) Values() []V {
 // Range calls fn for each key-value pair in the map.
 // If fn returns false, iteration stops.
 // The map is read-locked for the duration of the iteration.
+//
+// WARNING: because the read lock is held for the whole iteration, fn must NOT
+// call a mutating method (Set, Delete, Clear) on the same map — the RWMutex is
+// not reentrant, so it would deadlock.
 func (m *Map[K, V]) Range(fn func(key K, value V) bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

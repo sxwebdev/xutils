@@ -42,6 +42,28 @@ func TestSlice_GetAllReturnsCopy(t *testing.T) {
 	assert.Equal(t, []int{1, 2, 3}, s.GetAll(), "GetAll must hand out an independent copy")
 }
 
+func TestSlice_AddManyEmpty(t *testing.T) {
+	s := syncutil.NewSlice[int]()
+	s.Add(1)
+	s.AddMany(nil)     // nil must be a no-op
+	s.AddMany([]int{}) // empty must be a no-op
+	assert.Equal(t, []int{1}, s.GetAll())
+	assert.Equal(t, 1, s.Len())
+}
+
+// AddToIndex writes by index into a pre-sized slice (it is not append); an
+// out-of-range index must panic rather than silently grow or corrupt state.
+func TestSlice_AddToIndexOutOfRange(t *testing.T) {
+	s := syncutil.NewSliceWithLength[int](2)
+	assert.Panics(t, func() { s.AddToIndex(5, 1) })
+}
+
+func TestSlice_GetAllEmpty(t *testing.T) {
+	s := syncutil.NewSlice[int]()
+	assert.Empty(t, s.GetAll())
+	assert.NotNil(t, s.GetAll(), "GetAll must return a non-nil empty slice")
+}
+
 func TestSlice_ConcurrentAccess(t *testing.T) {
 	s := syncutil.NewSlice[int]()
 

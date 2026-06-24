@@ -35,7 +35,12 @@ func (l *Locker[T]) Get() T {
 	return *l.value
 }
 
-// GetPointer safely returns a pointer to the current value.
+// GetPointer returns a pointer to the current value.
+//
+// WARNING: the returned pointer escapes the lock. Reading or writing through it
+// is NOT synchronized — doing so concurrently with Set or Update is a data race.
+// Prefer [Locker.Get] (copy) or [Locker.Update] (mutate under the lock); use
+// GetPointer only when the caller guarantees no concurrent access.
 func (l *Locker[T]) GetPointer() *T {
 	l.mu.Lock()
 	defer l.mu.Unlock()

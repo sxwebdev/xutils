@@ -32,6 +32,40 @@ func TestLocker_GetPointer(t *testing.T) {
 	assert.Equal(t, 7, *p)
 }
 
+// Get returns a copy: mutating the returned value must not change the container.
+func TestLocker_GetReturnsCopy(t *testing.T) {
+	type box struct{ n int }
+	l := syncutil.NewLocker(box{n: 1})
+
+	got := l.Get()
+	got.n = 999
+	assert.Equal(t, 1, l.Get().n, "Get must return an independent copy")
+}
+
+// Update must mutate the same value that Get/GetPointer observe (i.e. it edits
+// in place, not a copy), and Set must replace what GetPointer subsequently sees.
+func TestLocker_UpdateSetGetPointerConsistency(t *testing.T) {
+	type box struct{ n int }
+	l := syncutil.NewLocker(box{n: 1})
+
+	l.Update(func(b *box) { b.n = 5 })
+	assert.Equal(t, 5, l.GetPointer().n, "Update must edit the value GetPointer returns")
+
+	l.Set(box{n: 42})
+	assert.Equal(t, 42, l.GetPointer().n, "Set must replace the value GetPointer returns")
+	assert.Equal(t, 42, l.Get().n)
+}
+
+// NewLocker copies its argument: later mutating the original value passed in
+// must not affect the stored value.
+func TestLocker_NewLockerCopiesArgument(t *testing.T) {
+	type box struct{ n int }
+	orig := box{n: 1}
+	l := syncutil.NewLocker(orig)
+	orig.n = 999
+	assert.Equal(t, 1, l.Get().n, "NewLocker must store a copy of its argument")
+}
+
 func TestLocker_ConcurrentUpdate(t *testing.T) {
 	l := syncutil.NewLocker(0)
 
