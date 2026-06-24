@@ -38,6 +38,9 @@ func NewExecutor(opts ...ExecutorOption) *Executor {
 //   - Updated RunState (always valid, should be persisted)
 //   - nil if pipeline completed or failed (check state.Status)
 //   - ErrSnooze if a poll step is waiting (caller should re-invoke after Duration)
+//   - ctx.Err() if the context is cancelled; the run is left resumable (not
+//     compensated), so persisting and re-invoking later continues from the
+//     interrupted step
 //   - Other errors indicate engine failures
 func (e *Executor) Run(ctx context.Context, p *Pipeline, state RunState) (RunState, error) {
 	// Validate pipeline definition.
@@ -124,6 +127,16 @@ func (e *Executor) executeSteps(
 		step := &steps[i]
 		stepPath := append(slices.Clone(parentPath), step.Name)
 
+		// Resume: the per-step snapshot records CurrentPath as the step that just
+		// finished. If we are resuming exactly at that step and it is already in
+		// CompletedSteps, skip it — re-executing would run its side effects again
+		// and append a duplicate completion (later causing double compensation).
+		// Branches are not skipped here: their resume path is deeper than stepPath,
+		// so slices.Equal is false and executeBranch handles entering them.
+		if i == startIdx && slices.Equal(stepPath, resumePath) && isStepCompleted(state, stepPath) {
+			continue
+		}
+
 		// Check context cancellation.
 		if ctx.Err() != nil {
 			data, marshalErr := ds.marshalData()
@@ -150,6 +163,21 @@ func (e *Executor) executeSteps(
 			// ErrSnooze — poll step waiting, return to caller.
 			if _, ok := errors.AsType[ErrSnooze](err); ok {
 				return state, err
+			}
+
+			// Context cancellation (e.g. graceful shutdown) is not a step failure:
+			// return it cleanly without compensating, leaving the run resumable —
+			// mirroring the top-of-loop check. Otherwise a cancel mid-retry (or an
+			// action that returns ctx.Err()) would roll back all progress and end
+			// the pipeline terminally.
+			if ctx.Err() != nil {
+				data, marshalErr := ds.marshalData()
+				if marshalErr != nil {
+					return state, marshalErr
+				}
+				state.Data = data
+				state.CurrentPath = stepPath
+				return state, ctx.Err()
 			}
 
 			// Check if error should skip compensation (retryable error).
@@ -426,11 +454,13 @@ func (e *Executor) runCompensation(
 
 	originalError := state.Error
 
-	// Start from CompensationIndex (or last step if not set).
-	if state.CompensationIndex <= 0 {
-		state.CompensationIndex = len(state.CompletedSteps) - 1
-	}
-
+	// CompensationIndex is the next completed-step index to compensate. It is
+	// always set by the caller before entering compensation: executeSteps stamps
+	// it to len(CompletedSteps)-1 on failure, and a resumed state carries the
+	// persisted value. A value of -1 means everything was already compensated
+	// and only finalization remains, so the loop below must not run — never
+	// reset the index here, or a crash-recovered compensation would re-run
+	// already-compensated steps (double compensation).
 	for i := state.CompensationIndex; i >= 0; i-- {
 		cs := state.CompletedSteps[i]
 		if !cs.HasCompensator {
@@ -611,6 +641,16 @@ func checkVersion(p *Pipeline, state RunState) error {
 		}
 	}
 	return nil
+}
+
+// isStepCompleted reports whether a step at the exact path already finished.
+func isStepCompleted(state RunState, path []string) bool {
+	for _, cs := range state.CompletedSteps {
+		if slices.Equal(cs.Path, path) {
+			return true
+		}
+	}
+	return false
 }
 
 // isPathPrefix checks if prefix is a prefix of path and path is longer.

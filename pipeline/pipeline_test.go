@@ -226,10 +226,12 @@ func TestResumeAfterCrash(t *testing.T) {
 		},
 	}
 
-	// Simulate: steps 1 and 2 completed, then crash.
+	// Simulate a real crash snapshot: step2 just finished, so CurrentPath points
+	// at step2 (the completed step) — exactly what executeAction persists. This
+	// mirrors what the executor actually writes, not an idealized "next step".
 	savedState := RunState{
 		Status:      RunStatusRunning,
-		CurrentPath: []string{"step3"},
+		CurrentPath: []string{"step2"},
 		CompletedSteps: []CompletedStep{
 			{Path: []string{"step1"}, HasCompensator: false},
 			{Path: []string{"step2"}, HasCompensator: false},
@@ -245,6 +247,49 @@ func TestResumeAfterCrash(t *testing.T) {
 	assert.Equal(t, 0, callCounts[0], "step1 should not be re-executed")
 	assert.Equal(t, 0, callCounts[1], "step2 should not be re-executed")
 	assert.Equal(t, 1, callCounts[2], "step3 should execute once")
+}
+
+// TestResumeFromRealActionSnapshot resumes from the actual snapshot the executor
+// persists after an action completes (CurrentPath = the finished step), which is
+// the real crash-recovery path. The completed step must not run again.
+func TestResumeFromRealActionSnapshot(t *testing.T) {
+	var calls [3]int
+	var snaps []RunState
+
+	p := &Pipeline{
+		Name: "resume_real_snapshot",
+		Steps: []Step{
+			Action("step1", func(_ context.Context, _ DataAccessor) error { calls[0]++; return nil }),
+			Action("step2", func(_ context.Context, _ DataAccessor) error { calls[1]++; return nil }),
+			Action("step3", func(_ context.Context, _ DataAccessor) error { calls[2]++; return nil }),
+		},
+	}
+
+	exec := newTestExecutor(t, &snaps)
+	_, err := exec.Run(context.Background(), p, RunState{})
+	require.NoError(t, err)
+
+	// Grab the snapshot persisted right after step1 finished.
+	var afterStep1 RunState
+	found := false
+	for _, s := range snaps {
+		if s.Status == RunStatusRunning && len(s.CompletedSteps) == 1 && s.CompletedSteps[0].Path[0] == "step1" {
+			afterStep1 = s
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected a snapshot after step1 completed")
+	require.Equal(t, []string{"step1"}, afterStep1.CurrentPath, "snapshot points at the finished step")
+
+	// Crash recovery: resume from that exact persisted snapshot.
+	calls = [3]int{}
+	out, err := exec.Run(context.Background(), p, afterStep1)
+	require.NoError(t, err)
+	assert.Equal(t, RunStatusCompleted, out.Status)
+	assert.Equal(t, 0, calls[0], "step1 already completed; must not re-run")
+	assert.Equal(t, 1, calls[1], "step2 runs once")
+	assert.Equal(t, 1, calls[2], "step3 runs once")
 }
 
 func TestIdempotency_CompletedPipelineNoOp(t *testing.T) {
