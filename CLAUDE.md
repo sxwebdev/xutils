@@ -47,6 +47,18 @@ Write tests that verify **behavior**, not the implementation. Concretely:
 - **Run with `-race`** for anything that spawns goroutines or touches shared
   state.
 
+### Test layout
+
+- **Default to the external `package <pkg>_test`** (black-box): it forces tests
+  through the public API, the way real callers use it. Drop to the internal
+  `package <pkg>` only when a test genuinely needs unexported symbols, and keep
+  those internal tests to a minimum.
+- **Mirror the source files.** Ideally each source file has its own test file
+  (`number.go` → `number_test.go`), so tests sit next to the code they cover.
+  This is a preference, not a rule — a couple of small files can share one — but
+  never let tests for several source files pile into one sprawling catch-all
+  test file. Split by the file under test.
+
 ### Coverage
 
 - **Always aim for 100% statement coverage per package.** ≥ 95% is the hard

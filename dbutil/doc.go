@@ -27,9 +27,9 @@
 //
 // # Column Types
 //
-// [Duration] is a time.Duration that round-trips through JSON (as a string such
-// as "1h30m") and SQL (as an int64 nanosecond count), implementing
-// json.Marshaler/Unmarshaler and sql.Scanner/driver.Valuer.
+// [Duration] is a time.Duration that round-trips through JSON and SQL as a
+// duration string such as "1h30m", implementing json.Marshaler/Unmarshaler and
+// sql.Scanner/driver.Valuer.
 //
 // [JSONField] wraps json.RawMessage so a JSON/JSONB column can be scanned and
 // stored without an intermediate struct, with helpers to convert into a map or

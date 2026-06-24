@@ -1,6 +1,7 @@
 package dbutil
 
 import (
+	"bytes"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
@@ -66,26 +67,22 @@ func (j *JSONField) Scan(value any) error {
 		return fmt.Errorf("cannot scan %T into JSONField", value)
 	}
 
-	// Skip empty strings or whitespace-only values
-	trimmed := []byte{}
-	for _, b := range data {
-		if b > 32 { // Skip control characters and spaces
-			trimmed = append(trimmed, b)
-		}
-	}
-
+	// Trim only surrounding whitespace. The previous implementation dropped
+	// every byte <= 32 across the whole payload, which silently stripped spaces
+	// and newlines inside JSON string values (corrupting the data).
+	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {
 		*j = nil
 		return nil
 	}
 
-	// Validate JSON before assigning
+	// Validate JSON before assigning.
 	if !json.Valid(trimmed) {
-		// If invalid, try to recover or log and return error
 		return fmt.Errorf("invalid JSON data in database: %s", string(data))
 	}
 
-	*j = JSONField(trimmed)
+	// Copy so we don't retain (or alias) the driver's buffer, which it may reuse.
+	*j = JSONField(append([]byte(nil), trimmed...))
 	return nil
 }
 

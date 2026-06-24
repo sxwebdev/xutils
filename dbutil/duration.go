@@ -34,17 +34,26 @@ func (d Duration) Value() (driver.Value, error) {
 	return time.Duration(d).String(), nil
 }
 
-// Scan implements the sql.Scanner interface.
+// Scan implements the sql.Scanner interface. It accepts both string and []byte,
+// since Value stores the duration as a string and drivers read text columns
+// back as either type.
 func (d *Duration) Scan(value any) error {
-	if v, ok := value.(string); ok {
-		duration, err := time.ParseDuration(v)
-		if err != nil {
-			return err
-		}
-		*d = Duration(duration)
-		return nil
+	var s string
+	switch v := value.(type) {
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("unsupported scan type: %T", value)
 	}
-	return fmt.Errorf("unsupported scan type: %T", value)
+
+	duration, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = Duration(duration)
+	return nil
 }
 
 // String returns the string representation of the duration

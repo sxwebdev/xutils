@@ -43,8 +43,7 @@ resp := dbutil.NewFindResponseWithCount(items, total)
 
 ## Column Types
 
-`Duration` is a `time.Duration` that round-trips through JSON (as a string like `"1h30m"`) and SQL (as an
-int64 nanosecond count):
+`Duration` is a `time.Duration` that round-trips through JSON and SQL as a duration string like `"1h30m"`:
 
 ```go
 type Config struct {
