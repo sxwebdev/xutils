@@ -19,7 +19,7 @@ type Broker[T any] struct {
 
 	// publishCh - incoming messages for publishing.
 	// Can be buffered if you want to avoid blocking Publish.
-	publishCh chan T
+	publishCh chan envelope[T]
 
 	// stopCh - signal to stop the broker.
 	stopCh chan struct{}
@@ -32,6 +32,14 @@ type Broker[T any] struct {
 
 	// logger is an optional logger for diagnostic messages.
 	logger loggerutil.Logger
+}
+
+// envelope pairs a message with the snapshot of subscriber channels taken at
+// publish time. Freezing the recipient set when Publish is called guarantees
+// that a subscriber which joins afterwards does not receive this message.
+type envelope[T any] struct {
+	msg        T
+	recipients []chan T
 }
 
 // BrokerOption configures a Broker.
@@ -47,7 +55,7 @@ func WithLogger[T any](l loggerutil.Logger) BrokerOption[T] {
 // NewBroker initializes the broker but does NOT start its goroutine.
 func NewBroker[T any](opts ...BrokerOption[T]) *Broker[T] {
 	b := &Broker[T]{
-		publishCh: make(chan T, 16), // can increase the buffer size if needed
+		publishCh: make(chan envelope[T], 16), // can increase the buffer size if needed
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
 	}
@@ -69,14 +77,14 @@ func (b *Broker[T]) Start() {
 			b.closeAllSubscribers()
 			return
 
-		case msg, ok := <-b.publishCh:
+		case env, ok := <-b.publishCh:
 			if !ok {
 				// If publishCh is unexpectedly closed, terminate.
 				b.closeAllSubscribers()
 				return
 			}
-			// Broadcast the message to all subscribers
-			b.broadcast(msg)
+			// Broadcast the message to the recipients snapshotted at publish time
+			b.broadcast(env)
 		}
 	}
 }
@@ -111,30 +119,45 @@ func (b *Broker[T]) Unsubscribe(ch chan T) {
 }
 
 // Publish sends a message to the internal queue.
-// If the broker is already closed, it ignores the message or returns.
+// If the broker is already closed, it ignores the message and returns.
 func (b *Broker[T]) Publish(msg T) {
 	if b.closed.Load() {
 		// The broker is stopped - do not accept new messages.
 		return
 	}
-	// You can either block on send or use select { case ... default: } as preferred.
-	b.publishCh <- msg
+
+	// Freeze the recipient set at publish time: a subscriber that joins after
+	// this call returns must not receive this message, and a message published
+	// with no subscribers is dropped rather than queued for a future one.
+	var recipients []chan T
+	b.subs.Range(func(key, _ any) bool {
+		recipients = append(recipients, key.(chan T)) //nolint:forcetypeassert
+		return true
+	})
+	if len(recipients) == 0 {
+		return
+	}
+
+	select {
+	case b.publishCh <- envelope[T]{msg: msg, recipients: recipients}:
+	case <-b.stopCh:
+		// Broker is stopping concurrently; drop instead of blocking forever on a
+		// full buffer once the broker goroutine has stopped draining publishCh.
+	}
 }
 
 // --- Helper methods ---
 
-// broadcast sends msg to all subscribers.
+// broadcast sends the message to the recipients captured at publish time.
 // On panic (e.g., if a subscriber closed their channel), it removes the subscription from subs.
-func (b *Broker[T]) broadcast(msg T) {
-	b.subs.Range(func(key, _ any) bool {
-		ch := key.(chan T) //nolint:forcetypeassert
-		safeSend(ch, msg, b.logger, func(ch chan T) {
+func (b *Broker[T]) broadcast(env envelope[T]) {
+	for _, ch := range env.recipients {
+		safeSend(ch, env.msg, b.logger, func(ch chan T) {
 			// If the send causes a panic (channel is closed),
 			// remove it from the list of subscribers.
 			b.subs.Delete(ch)
 		})
-		return true
-	})
+	}
 }
 
 // closeAllSubscribers closes all channels in subs.

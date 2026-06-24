@@ -39,7 +39,11 @@
 //	// both ch1 and ch2 receive "event"
 //
 // [Broker.Publish] sends a message to the internal publish queue (capacity 16).
-// After [Broker.Stop] is called, Publish silently ignores new messages.
+// The set of recipients is frozen when Publish is called: a subscriber that
+// joins after Publish returns does not receive that message, and a message
+// published while there are no subscribers is dropped rather than queued for a
+// future one. After [Broker.Stop] is called, Publish silently ignores new
+// messages and never blocks, even when racing a concurrent Stop.
 //
 // # Unsubscribe
 //

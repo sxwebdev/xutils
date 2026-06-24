@@ -53,6 +53,21 @@ msg1 := <-ch1 // "event"
 msg2 := <-ch2 // "event"
 ```
 
+## Delivery Semantics
+
+Recipients are frozen at publish time. A subscriber only receives messages
+published **after** its `Subscribe()` call returns; a message published while
+there are no subscribers is dropped rather than queued for a future one:
+
+```go
+b.Publish("early") // no subscribers yet → dropped
+
+ch := b.Subscribe()
+b.Publish("late")
+
+msg := <-ch // "late" (never "early")
+```
+
 ## Buffering
 
 | Channel            | Buffer Size |
@@ -72,7 +87,7 @@ ch := b.Subscribe() // returns nil
 b.Publish("ignored") // no effect
 ```
 
-`Stop()` closes all subscriber channels, so range loops over subscriber channels will terminate naturally.
+`Stop()` closes all subscriber channels, so range loops over subscriber channels will terminate naturally. `Publish` never blocks, even when called concurrently with `Stop`.
 
 ## Options
 
