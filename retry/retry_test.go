@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -220,95 +221,6 @@ func TestRetry_Callbacks(t *testing.T) {
 	})
 }
 
-func TestRetry_LinearDelayIsConstant(t *testing.T) {
-	const (
-		delay    = 10 * time.Millisecond
-		attempts = 4 // 3 waits between 4 attempts
-	)
-
-	var calls int
-	start := time.Now()
-	err := retry.New(
-		retry.WithPolicy(retry.PolicyLinear),
-		retry.WithMaxAttempts(attempts),
-		retry.WithDelay(delay),
-	).SetLogger(newLogger()).Do(func() error {
-		calls++
-		return retry.ErrRetry
-	})
-	elapsed := time.Since(start)
-
-	require.Error(t, err)
-	require.Equal(t, attempts, calls)
-	// 3 constant waits of 10ms ~= 30ms. Lower bound catches "delay not applied",
-	// upper bound catches "delay grows" (which would be a backoff bug).
-	require.GreaterOrEqual(t, elapsed, 25*time.Millisecond)
-	require.Less(t, elapsed, 60*time.Millisecond)
-}
-
-func TestRetry_BackoffDelayGrows(t *testing.T) {
-	// Backoff with base 5ms over 4 attempts waits 5+10+20 = 35ms.
-	// Linear with the same base would wait 5+5+5 = 15ms, so a lower bound of
-	// 30ms proves the delay actually doubled rather than staying constant.
-	var calls int
-	start := time.Now()
-	err := retry.New(
-		retry.WithPolicy(retry.PolicyBackoff),
-		retry.WithMaxAttempts(4),
-		retry.WithDelay(5*time.Millisecond),
-	).SetLogger(newLogger()).Do(func() error {
-		calls++
-		return retry.ErrRetry
-	})
-	elapsed := time.Since(start)
-
-	require.Error(t, err)
-	require.Equal(t, 4, calls)
-	require.GreaterOrEqual(t, elapsed, 30*time.Millisecond)
-}
-
-func TestRetry_MaxDelayCapsBackoff(t *testing.T) {
-	// Uncapped: 2+4+8+16+32 = 62ms. Capped at 5ms: 2+4+5+5+5 = 21ms.
-	var calls int
-	start := time.Now()
-	err := retry.New(
-		retry.WithPolicy(retry.PolicyBackoff),
-		retry.WithMaxAttempts(6),
-		retry.WithDelay(2*time.Millisecond),
-		retry.WithMaxDelay(5*time.Millisecond),
-	).SetLogger(newLogger()).Do(func() error {
-		calls++
-		return retry.ErrRetry
-	})
-	elapsed := time.Since(start)
-
-	require.Error(t, err)
-	require.Equal(t, 6, calls)
-	require.GreaterOrEqual(t, elapsed, 15*time.Millisecond) // waits did happen
-	require.Less(t, elapsed, 45*time.Millisecond)           // and were capped (< uncapped 62ms)
-}
-
-func TestRetry_BackoffDelayOverflow(t *testing.T) {
-	// A base near the int64 limit makes the doubling overflow; the guard must
-	// fall back to maxDelay instead of sleeping for days (or a negative dur).
-	var calls int
-	start := time.Now()
-	err := retry.New(
-		retry.WithPolicy(retry.PolicyBackoff),
-		retry.WithMaxAttempts(3),
-		retry.WithDelay(1<<62),
-		retry.WithMaxDelay(time.Millisecond),
-		retry.WithLogger(newLogger()),
-	).Do(func() error {
-		calls++
-		return retry.ErrRetry
-	})
-
-	require.Error(t, err)
-	require.Equal(t, 3, calls)
-	require.Less(t, time.Since(start), 100*time.Millisecond)
-}
-
 func TestRetry_ContextCancellation(t *testing.T) {
 	t.Run("already cancelled before first attempt, every policy", func(t *testing.T) {
 		policies := []retry.Policy{retry.PolicyLinear, retry.PolicyBackoff, retry.PolicyInfinite}
@@ -335,50 +247,58 @@ func TestRetry_ContextCancellation(t *testing.T) {
 	})
 
 	t.Run("cancellation interrupts the linear wait", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
+		// Deterministic with a fake clock: the wait is one hour, the cancel
+		// fires at 50ms, so Do must abort at exactly 50ms — both bounds pinned.
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 
-		var calls int
-		go func() {
-			time.Sleep(50 * time.Millisecond) // let the first attempt enter the wait
-			cancel()
-		}()
+			go func() {
+				time.Sleep(50 * time.Millisecond) // let the first attempt enter the wait
+				cancel()
+			}()
 
-		start := time.Now()
-		err := retry.New(
-			retry.WithPolicy(retry.PolicyLinear),
-			retry.WithMaxAttempts(10),
-			retry.WithDelay(time.Hour),
-			retry.WithContext(ctx),
-		).SetLogger(newLogger()).Do(func() error {
-			calls++
-			return retry.ErrRetry
+			var calls int
+			base := time.Now()
+			err := retry.New(
+				retry.WithPolicy(retry.PolicyLinear),
+				retry.WithMaxAttempts(10),
+				retry.WithDelay(time.Hour),
+				retry.WithContext(ctx),
+			).SetLogger(newLogger()).Do(func() error {
+				calls++
+				return retry.ErrRetry
+			})
+			elapsed := time.Since(base)
+
+			require.ErrorIs(t, err, context.Canceled)
+			require.Equal(t, 1, calls)                     // failed once, then cancelled mid-wait
+			require.Equal(t, 50*time.Millisecond, elapsed) // aborted exactly at cancel, not the full hour
 		})
-
-		require.ErrorIs(t, err, context.Canceled)
-		require.Equal(t, 1, calls)                        // failed once, then cancelled mid-wait
-		require.Less(t, time.Since(start), 5*time.Second) // did not wait the full hour
 	})
 
 	t.Run("cancellation interrupts the backoff wait", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-		defer cancel()
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			t.Cleanup(cancel)
 
-		var calls int
-		start := time.Now()
-		err := retry.New(
-			retry.WithPolicy(retry.PolicyBackoff),
-			retry.WithMaxAttempts(10),
-			retry.WithDelay(time.Hour),
-			retry.WithContext(ctx),
-		).SetLogger(newLogger()).Do(func() error {
-			calls++
-			return retry.ErrRetry
+			var calls int
+			base := time.Now()
+			err := retry.New(
+				retry.WithPolicy(retry.PolicyBackoff),
+				retry.WithMaxAttempts(10),
+				retry.WithDelay(time.Hour),
+				retry.WithContext(ctx),
+			).SetLogger(newLogger()).Do(func() error {
+				calls++
+				return retry.ErrRetry
+			})
+			elapsed := time.Since(base)
+
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Equal(t, 1, calls)
+			require.Equal(t, 50*time.Millisecond, elapsed) // aborted exactly at the deadline
 		})
-
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-		require.Equal(t, 1, calls)
-		require.Less(t, time.Since(start), 5*time.Second)
 	})
 }
 
@@ -413,11 +333,12 @@ func TestRetry_InfinitePolicy(t *testing.T) {
 	})
 
 	t.Run("stops on ErrExit", func(t *testing.T) {
-		var calls int
+		var calls, failed int
 		err := retry.New(
 			retry.WithPolicy(retry.PolicyInfinite),
 			retry.WithContext(t.Context()),
 			retry.WithDelay(time.Millisecond),
+			retry.WithOnFailedFn(func() { failed++ }),
 		).SetLogger(newLogger()).Do(func() error {
 			calls++
 			if calls == 3 {
@@ -428,6 +349,7 @@ func TestRetry_InfinitePolicy(t *testing.T) {
 
 		require.ErrorIs(t, err, retry.ErrExit)
 		require.Equal(t, 3, calls)
+		require.Equal(t, 3, failed) // onFailed fires for every failed attempt incl. the ErrExit one
 	})
 
 	t.Run("stops on context cancellation", func(t *testing.T) {

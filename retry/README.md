@@ -43,7 +43,7 @@ retry.New(
     retry.WithDelay(2*time.Second),
     retry.WithMaxAttempts(5),
 )
-// delays: 2s, 2s, 2s, 2s, 2s
+// delays: 2s, 2s, 2s, 2s (4 waits between 5 attempts)
 ```
 
 ### Backoff (default)
@@ -56,7 +56,7 @@ retry.New(
     retry.WithDelay(time.Second),
     retry.WithMaxAttempts(5),
 )
-// delays: 1s, 2s, 4s, 8s, 16s
+// delays: 1s, 2s, 4s, 8s (4 waits between 5 attempts)
 ```
 
 Use `WithMaxDelay` to cap the exponential growth:
@@ -66,9 +66,9 @@ retry.New(
     retry.WithPolicy(retry.PolicyBackoff),
     retry.WithDelay(time.Second),
     retry.WithMaxDelay(10*time.Second),
-    retry.WithMaxAttempts(5),
+    retry.WithMaxAttempts(7),
 )
-// delays: 1s, 2s, 4s, 8s, 10s (capped)
+// delays: 1s, 2s, 4s, 8s, 10s, 10s (6 waits between 7 attempts; capped at 10s)
 ```
 
 ### Infinite

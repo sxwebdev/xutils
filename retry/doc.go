@@ -31,7 +31,7 @@
 //		retry.WithDelay(2*time.Second),
 //		retry.WithMaxAttempts(5),
 //	)
-//	// delays: 2s, 2s, 2s, 2s, 2s
+//	// delays: 2s, 2s, 2s, 2s (4 waits between 5 attempts)
 //
 // Backoff — delay doubles on each attempt (delay * 2^(attempt-1)). Use
 // [WithMaxDelay] to bound the exponential growth:
@@ -40,9 +40,9 @@
 //		retry.WithPolicy(retry.PolicyBackoff),
 //		retry.WithDelay(time.Second),
 //		retry.WithMaxDelay(10*time.Second),
-//		retry.WithMaxAttempts(5),
+//		retry.WithMaxAttempts(7),
 //	)
-//	// delays: 1s, 2s, 4s, 8s, 10s (capped)
+//	// delays: 1s, 2s, 4s, 8s, 10s, 10s (6 waits between 7 attempts; capped at 10s)
 //
 // Infinite — retries until context cancellation or [ErrExit]:
 //
