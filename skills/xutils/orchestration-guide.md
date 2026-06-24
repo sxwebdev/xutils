@@ -62,9 +62,9 @@ executor := pipeline.NewExecutor(
 
 // First run
 state, err := executor.Run(ctx, p, pipeline.RunState{})
-if errors.Is(err, pipeline.ErrSnooze) {
-    // Poll step is waiting — save state and retry later
-    log.Printf("snoozing for: %v", err)
+if snooze, ok := errors.AsType[pipeline.ErrSnooze](err); ok {
+    // Poll step is waiting — save state and retry after snooze.Duration
+    log.Printf("snoozing for: %v", snooze.Duration)
 }
 
 // Resume from saved state
@@ -88,12 +88,15 @@ orderID, err := pipeline.GetData[string](data, "order_id")
 // Stop compensation (saga rollback) for this error:
 return pipeline.NoCompensate(err)
 
-// Sentinel errors:
-// pipeline.ErrSnooze          — poll step is waiting
-// pipeline.ErrStepFailed      — step execution failed
+// Error types (match with errors.As / errors.AsType, not errors.Is):
+// pipeline.ErrSnooze             — poll step is waiting (carries Duration)
+// pipeline.ErrStepFailed         — step execution failed
 // pipeline.ErrCompensationFailed — compensation action failed
-// pipeline.ErrPollTimeout     — poll exceeded MaxDuration
-// pipeline.ErrVersionMismatch — state version incompatible with pipeline
+// pipeline.ErrPollTimeout        — poll exceeded MaxDuration
+// pipeline.ErrVersionMismatch    — state version incompatible with pipeline
+//
+// Sentinel (match with errors.Is):
+// pipeline.ErrNoCompensate       — wrapped by NoCompensate to skip rollback
 ```
 
 ### Versioning
@@ -140,7 +143,7 @@ step2, _ := workflow.NewStep("connect_db", func(sc *workflow.StepContext) error 
     cfg, _ := workflow.GetVar[Config](sc.Workflow, "config")
     return connectDB(sc.Context, cfg.DSN)
 }, workflow.WithStepTimeout(10*time.Second),
-   workflow.WithStepRetryPolicy(workflow.RunWithBackoff(time.Second)),
+   workflow.WithStepRetryPolicy(workflow.RunWithBackoff), // initial delay = step Timeout
 )
 
 stage1.Steps = []*workflow.Step{step1, step2}
@@ -171,10 +174,9 @@ wf.Stages = []*workflow.Stage{stage1, compensationStage}
 // Fresh run
 err := wf.Run(ctx)
 
-// Resume from saved state
+// Resume from saved state (snap is a workflow.Snapshot)
 snap, _ := db.LoadSnapshot(ctx)
-snapJSON, _ := json.Marshal(snap)
-wf.SetJSONSnapshot(snapJSON)
+wf.SetSnapshot(snap) // or wf.SetJSONSnapshot(jsonString) from a stored JSON string
 err = wf.Run(ctx)
 ```
 
@@ -225,9 +227,12 @@ pending → processing → completed
 ### Retry policies
 
 ```go
-// Linear: fixed delay between retries (default)
-workflow.WithStepRetryPolicy(workflow.RunWithLinear(500 * time.Millisecond))
+// RunWithLinear / RunWithBackoff are retry policy functions passed directly
+// (not constructors). The delay comes from the step's Timeout.
 
-// Backoff: exponential delay (delay * 2^attempt)
-workflow.WithStepRetryPolicy(workflow.RunWithBackoff(time.Second))
+// Linear: fixed delay (= step Timeout) between retries (default)
+workflow.WithStepRetryPolicy(workflow.RunWithLinear)
+
+// Backoff: delay starts at the step Timeout and doubles each retry
+workflow.WithStepRetryPolicy(workflow.RunWithBackoff)
 ```

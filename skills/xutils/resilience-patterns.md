@@ -27,7 +27,7 @@ r := retry.New(
 )
 
 // Backoff: exponential delay (delay * 2^(attempt-1))
-// Attempts: 1s, 2s, 4s, 8s, 16s
+// delays: 1s, 2s, 4s, 8s (4 waits between 5 attempts)
 r := retry.New(
     retry.WithPolicy(retry.PolicyBackoff),
     retry.WithDelay(time.Second),
@@ -88,11 +88,11 @@ r.SetDelay(2 * time.Second)
 import "github.com/sxwebdev/xutils/randutil"
 
 // Random string (crypto/rand, rejection sampling to avoid modulo bias)
-token, err := randutil.GenerateRandomString(32, "")
+token, err := randutil.GenerateRandomString(32)
 // uses default alphabet: a-z, A-Z, 0-9, _-@#$%
 
-// Custom alphabet
-code, err := randutil.GenerateRandomString(6, "0123456789")
+// Custom alphabet (ASCII, byte-indexed, max 256 bytes)
+code, err := randutil.GenerateRandomString(6, randutil.WithAlphabet("0123456789"))
 
 // Random number with exact digit count (up to 19 digits)
 num, err := randutil.GenerateRandomNumber(6) // e.g., 482917
