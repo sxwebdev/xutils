@@ -43,7 +43,11 @@ func (s *Slice[T]) GetAll() []T {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.items
+	// Return a copy to prevent external modification of (and data races on) the
+	// internal slice — the whole point of the thread-safe wrapper.
+	result := make([]T, len(s.items))
+	copy(result, s.items)
+	return result
 }
 
 func (s *Slice[T]) Len() int {
