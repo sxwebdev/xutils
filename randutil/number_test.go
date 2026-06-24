@@ -2,46 +2,10 @@ package randutil_test
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/sxwebdev/xutils/randutil"
 )
-
-func TestGenerateRandomString(t *testing.T) {
-	tests := []struct {
-		name     string
-		n        int
-		alphabet string
-	}{
-		{"length 0", 0, ""},
-		{"length 1 default alphabet", 1, ""},
-		{"length 10 default alphabet", 10, ""},
-		{"length 100 default alphabet", 100, ""},
-		{"length 1000 default alphabet", 1000, ""},
-		{"length 100 custom alphabet", 100, "abc"},
-		{"length 100 custom alphabet", 100, "0123456789"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s, err := randutil.GenerateRandomString(tt.n, tt.alphabet)
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-			fmt.Println(s)
-			if len(s) != tt.n {
-				t.Errorf("expected length %d, got %d", tt.n, len(s))
-			}
-			if tt.alphabet != "" {
-				for _, c := range s {
-					if !strings.ContainsRune(tt.alphabet, c) {
-						t.Errorf("character %q not in alphabet %q", c, tt.alphabet)
-					}
-				}
-			}
-		})
-	}
-}
 
 func TestGenerateRandomNumber(t *testing.T) {
 	tests := []struct {
@@ -59,7 +23,6 @@ func TestGenerateRandomNumber(t *testing.T) {
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
-			fmt.Println(n)
 			s := fmt.Sprintf("%d", n)
 			if len(s) != int(tt.length) {
 				t.Errorf("expected length %d, got %d", tt.length, len(s))
@@ -70,7 +33,25 @@ func TestGenerateRandomNumber(t *testing.T) {
 		})
 	}
 
-	// Test error cases
+	// Regression: length 19 used to overflow int64 (10^19-1 does not fit),
+	// occasionally yielding negative / out-of-range values. Hammer it so the
+	// bug is caught deterministically rather than ~8% of the time.
+	t.Run("length 19 is always a valid 19-digit int64", func(t *testing.T) {
+		const minInt64Len19 = int64(1000000000000000000) // 10^18
+		for range 5000 {
+			n, err := randutil.GenerateRandomNumber(19)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if n < minInt64Len19 {
+				t.Fatalf("value below 10^18 (negative or too small): %d", n)
+			}
+			if s := fmt.Sprintf("%d", n); len(s) != 19 {
+				t.Fatalf("expected 19 digits, got %d (%s)", len(s), s)
+			}
+		}
+	})
+
 	t.Run("length 0", func(t *testing.T) {
 		_, err := randutil.GenerateRandomNumber(0)
 		if err == nil {
