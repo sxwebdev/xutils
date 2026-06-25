@@ -48,7 +48,7 @@ func TestCompensationFailure(t *testing.T) {
 	}
 
 	exec := newTestExecutor(t, nil)
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 
 	var cf *ErrCompensationFailed
 	require.True(t, errors.As(err, &cf), "must return ErrCompensationFailed")
@@ -84,7 +84,7 @@ func TestCompensationSkipsMissingOrUncompensatedSteps(t *testing.T) {
 	}
 
 	exec := newTestExecutor(t, nil)
-	out, err := exec.Run(context.Background(), p, state)
+	out, err := exec.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, out.Status)
 	assert.Equal(t, 1, compA, "only the real compensator runs")
@@ -105,7 +105,7 @@ func TestBranchUnknownPath(t *testing.T) {
 	}
 
 	exec := newTestExecutor(t, nil)
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err) // step failure compensated → failed state
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Contains(t, state.Error, "unknown path")
@@ -123,7 +123,7 @@ func TestBranchDecideError(t *testing.T) {
 	}
 
 	exec := newTestExecutor(t, nil)
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err) // step failure compensated → failed state
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Contains(t, state.Error, "decide")
@@ -145,7 +145,7 @@ func TestBranchResumeSavedPathNotFound(t *testing.T) {
 		CurrentPath: []string{"b", "ghost", "x"},
 	}
 	exec := newTestExecutor(t, nil)
-	out, err := exec.Run(context.Background(), p, state)
+	out, err := exec.Run(t.Context(), p, state)
 	require.NoError(t, err) // surfaced through compensation → failed state
 	assert.Equal(t, RunStatusFailed, out.Status)
 	assert.Contains(t, out.Error, "saved path")
@@ -163,7 +163,7 @@ func TestOnEnterError(t *testing.T) {
 		},
 	}
 	exec := newTestExecutor(t, nil)
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err) // failure is compensated and surfaced via state
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Contains(t, state.Error, "on_enter")
@@ -181,7 +181,7 @@ func TestBranchOnEnterHookFires(t *testing.T) {
 		},
 	}
 	exec := newTestExecutor(t, nil)
-	_, err := exec.Run(context.Background(), p, RunState{})
+	_, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.True(t, entered, "branch OnEnter must fire")
 }
@@ -200,7 +200,7 @@ func TestPollCheckError(t *testing.T) {
 	exec := newTestExecutor(t, nil)
 	// A step error triggers compensation; with no compensators it completes, so
 	// Run reports success at the engine level and the failure lands in state.
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Contains(t, state.Error, "poll boom")
@@ -223,14 +223,14 @@ func TestRetryWithBackoff(t *testing.T) {
 		},
 	}
 	exec := newTestExecutor(t, nil)
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 3, attempts)
 }
 
 func TestRetryContextCancelledDuringWait(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var attempts int
 	p := &Pipeline{
 		Name: "retry_cancel",
@@ -263,7 +263,7 @@ func TestRetryContextCancelledDuringWait(t *testing.T) {
 func TestCancellationDuringStepIsResumable(t *testing.T) {
 	var calls [2]int
 	firstRun := true
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	p := &Pipeline{
 		Name: "cancel_resumable",
@@ -294,7 +294,7 @@ func TestCancellationDuringStepIsResumable(t *testing.T) {
 	// Resume on a fresh context: completed step a must not re-run; b resumes.
 	calls = [2]int{}
 	exec2 := newTestExecutor(t, nil)
-	out, err := exec2.Run(context.Background(), p, state)
+	out, err := exec2.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, out.Status)
 	assert.Equal(t, 0, calls[0], "completed step a must not re-run")
@@ -314,7 +314,7 @@ func TestResumeUnknownStepRestartsFromStart(t *testing.T) {
 	// A deeper unknown path also exercises the isPathPrefix mismatch branch.
 	state := RunState{Status: RunStatusRunning, CurrentPath: []string{"ghost", "sub"}}
 	exec := newTestExecutor(t, nil)
-	out, err := exec.Run(context.Background(), p, state)
+	out, err := exec.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, out.Status)
 	assert.Equal(t, 1, calls)
@@ -359,7 +359,7 @@ func TestMarshalDataError(t *testing.T) {
 		},
 	}
 	exec := newTestExecutor(t, nil)
-	_, err := exec.Run(context.Background(), p, RunState{})
+	_, err := exec.Run(t.Context(), p, RunState{})
 	require.Error(t, err, "unmarshalable data must surface a marshal error")
 	assert.Contains(t, err.Error(), "marshal")
 }
@@ -400,7 +400,7 @@ func TestValidationErrors(t *testing.T) {
 	exec := newTestExecutor(t, nil)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := exec.Run(context.Background(), tc.p, RunState{})
+			_, err := exec.Run(t.Context(), tc.p, RunState{})
 			require.Error(t, err)
 		})
 	}
@@ -421,7 +421,7 @@ func TestSnapshotErrorsAreNonFatal(t *testing.T) {
 		Name:  "snap_ok",
 		Steps: []Step{Action("a", okAction)},
 	}
-	state, err := exec.Run(context.Background(), okPipe, RunState{})
+	state, err := exec.Run(t.Context(), okPipe, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 
@@ -437,7 +437,7 @@ func TestSnapshotErrorsAreNonFatal(t *testing.T) {
 			Action("b", func(_ context.Context, _ DataAccessor) error { return errors.New("boom") }),
 		},
 	}
-	state, err = exec.Run(context.Background(), failPipe, RunState{})
+	state, err = exec.Run(t.Context(), failPipe, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Equal(t, 1, comp, "compensation runs despite snapshot errors")
@@ -465,7 +465,7 @@ func TestCompensationInBranchFindsNestedStep(t *testing.T) {
 		},
 	}
 	exec := newTestExecutor(t, nil)
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Equal(t, 1, compInner, "nested compensator must be found and run")

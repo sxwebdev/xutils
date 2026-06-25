@@ -64,7 +64,7 @@ func TestLinearPipeline(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
@@ -97,7 +97,7 @@ func TestPollWithSnooze(t *testing.T) {
 	executor := newTestExecutor(t, nil)
 
 	// First run — poll returns not done.
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 	snooze, ok := errors.AsType[ErrSnooze](err)
 	require.True(t, ok)
@@ -106,14 +106,14 @@ func TestPollWithSnooze(t *testing.T) {
 	assert.Equal(t, 1, pollCount)
 
 	// Second run — resume, poll returns not done again.
-	state, err = executor.Run(context.Background(), p, state)
+	state, err = executor.Run(t.Context(), p, state)
 	require.Error(t, err)
 	_, ok = errors.AsType[ErrSnooze](err)
 	require.True(t, ok)
 	assert.Equal(t, 2, pollCount)
 
 	// Third run — resume, poll returns done, pipeline completes.
-	state, err = executor.Run(context.Background(), p, state)
+	state, err = executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 3, pollCount)
@@ -159,7 +159,7 @@ func TestBranch(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
@@ -194,7 +194,7 @@ func TestCompensation(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 
 	require.NoError(t, err) // Compensation completed, pipeline is failed but no engine error.
 	assert.Equal(t, RunStatusFailed, state.Status)
@@ -239,7 +239,7 @@ func TestResumeAfterCrash(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, savedState)
+	state, err := executor.Run(t.Context(), p, savedState)
 
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
@@ -266,7 +266,7 @@ func TestResumeFromRealActionSnapshot(t *testing.T) {
 	}
 
 	exec := newTestExecutor(t, &snaps)
-	_, err := exec.Run(context.Background(), p, RunState{})
+	_, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 
 	// Grab the snapshot persisted right after step1 finished.
@@ -284,7 +284,7 @@ func TestResumeFromRealActionSnapshot(t *testing.T) {
 
 	// Crash recovery: resume from that exact persisted snapshot.
 	calls = [3]int{}
-	out, err := exec.Run(context.Background(), p, afterStep1)
+	out, err := exec.Run(t.Context(), p, afterStep1)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, out.Status)
 	assert.Equal(t, 0, calls[0], "step1 already completed; must not re-run")
@@ -308,13 +308,13 @@ func TestIdempotency_CompletedPipelineNoOp(t *testing.T) {
 	executor := newTestExecutor(t, nil)
 
 	// Run to completion.
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 1, callCount)
 
 	// Run again with completed state — should be no-op.
-	state, err = executor.Run(context.Background(), p, state)
+	state, err = executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 1, callCount) // Still 1, not called again.
@@ -332,7 +332,7 @@ func TestIdempotency_FailedPipelineNoOp(t *testing.T) {
 
 	// Already failed state.
 	state := RunState{Status: RunStatusFailed, Error: "previous error"}
-	state, err := executor.Run(context.Background(), p, state)
+	state, err := executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 }
@@ -360,7 +360,7 @@ func TestDataPassingBetweenSteps(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 }
@@ -399,7 +399,7 @@ func TestDataPersistenceThroughSnapshot(t *testing.T) {
 	executor := newTestExecutor(t, nil)
 
 	// First run — setup completes, poll snoozes.
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 	_, ok := errors.AsType[ErrSnooze](err)
 	require.True(t, ok)
@@ -408,7 +408,7 @@ func TestDataPersistenceThroughSnapshot(t *testing.T) {
 	assert.NotNil(t, state.Data["counter"])
 
 	// Second run — poll completes, verify reads persisted data.
-	state, err = executor.Run(context.Background(), p, state)
+	state, err = executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 }
@@ -426,7 +426,7 @@ func TestSnapshotCalledAfterEachStep(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, &snapshots)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 
@@ -458,7 +458,7 @@ func TestOnEnterHook(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, []string{"enter1", "action1", "enter2", "action2"}, hookCalls)
@@ -481,7 +481,7 @@ func TestRetry(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts))
@@ -498,7 +498,7 @@ func TestRetryExhausted(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err) // Compensation ran (no compensators), pipeline is failed.
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Contains(t, state.Error, "permanent failure")
@@ -539,7 +539,7 @@ func TestNestedBranchWithCompensation(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 
@@ -572,7 +572,7 @@ func TestPollMaxDuration(t *testing.T) {
 	state.CurrentPath = []string{"forever_poll"}
 	state.Status = RunStatusPolling
 
-	state, err := executor.Run(context.Background(), p, state)
+	state, err := executor.Run(t.Context(), p, state)
 	// Should fail due to timeout → compensation → failed.
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
@@ -604,14 +604,14 @@ func TestEmptyBranchPath(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, []string{"after"}, executed)
 }
 
 func TestContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	p := &Pipeline{
 		Name: "cancel_test",
@@ -645,7 +645,7 @@ func TestValidation_DuplicateStepNames(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	_, err := executor.Run(context.Background(), p, RunState{})
+	_, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate step name")
 }
@@ -659,7 +659,7 @@ func TestValidation_NoStepType(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	_, err := executor.Run(context.Background(), p, RunState{})
+	_, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exactly one of Action, Poll, or Branch")
 }
@@ -709,7 +709,7 @@ func TestCompensationInBranch(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Equal(t, []string{"delegate", "fails_here", "reclaim"}, executed)
@@ -742,7 +742,7 @@ func TestResumePollInsideBranch(t *testing.T) {
 	executor := newTestExecutor(t, nil)
 
 	// First run — enter branch, complete setup, poll snoozes.
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 	_, ok := errors.AsType[ErrSnooze](err)
 	require.True(t, ok)
@@ -751,7 +751,7 @@ func TestResumePollInsideBranch(t *testing.T) {
 	assert.Equal(t, []string{"decide", "path_a", "wait"}, state.CurrentPath)
 
 	// Second run — resume inside branch, poll completes, pipeline finishes.
-	state, err = executor.Run(context.Background(), p, state)
+	state, err = executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 2, pollCount)
@@ -776,7 +776,7 @@ func TestNoCompensateError(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 
 	// Error should propagate to caller.
 	require.Error(t, err)
@@ -807,7 +807,7 @@ func TestFailedStepPath(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err) // Compensation completed.
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.Equal(t, []string{"decide", "path_a", "inner_fail"}, state.FailedStepPath)
@@ -836,7 +836,7 @@ func TestErrorContextInCompensation(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 	assert.True(t, compensationSawContext, "compensation should see data from earlier steps")
@@ -854,7 +854,7 @@ func TestVersionStampedOnNewExecution(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 3, state.Version)
@@ -876,7 +876,7 @@ func TestVersionMismatchRejectsOldState(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, state)
+	state, err := executor.Run(t.Context(), p, state)
 	require.Error(t, err)
 
 	var vErr *ErrVersionMismatch
@@ -901,7 +901,7 @@ func TestVersionMismatchRejectsNewerState(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	_, err := executor.Run(context.Background(), p, state)
+	_, err := executor.Run(t.Context(), p, state)
 	require.Error(t, err)
 
 	var vErr *ErrVersionMismatch
@@ -930,7 +930,7 @@ func TestVersionMinResumeVersionAllowsOldState(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, state)
+	state, err := executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.True(t, executed)
@@ -953,7 +953,7 @@ func TestVersionAcceptLegacyStates(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, state)
+	state, err := executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 }
@@ -968,7 +968,7 @@ func TestVersionLegacyBackwardCompat(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 0, state.Version)
@@ -990,7 +990,7 @@ func TestVersionTerminalStateSkipsCheck(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, state)
+	state, err := executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 }
@@ -1011,7 +1011,7 @@ func TestVersionMismatchCompensatingState(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	_, err := executor.Run(context.Background(), p, state)
+	_, err := executor.Run(t.Context(), p, state)
 	require.Error(t, err)
 
 	var vErr *ErrVersionMismatch
@@ -1022,7 +1022,7 @@ func TestVersionValidation(t *testing.T) {
 	executor := newTestExecutor(t, nil)
 
 	// Negative version.
-	_, err := executor.Run(context.Background(), &Pipeline{
+	_, err := executor.Run(t.Context(), &Pipeline{
 		Name:    "bad",
 		Version: -1,
 		Steps:   []Step{Action("s", func(_ context.Context, _ DataAccessor) error { return nil })},
@@ -1030,7 +1030,7 @@ func TestVersionValidation(t *testing.T) {
 	assert.ErrorContains(t, err, "version must be >= 0")
 
 	// MinResumeVersion > Version.
-	_, err = executor.Run(context.Background(), &Pipeline{
+	_, err = executor.Run(t.Context(), &Pipeline{
 		Name:             "bad",
 		Version:          1,
 		MinResumeVersion: new(2),
@@ -1039,7 +1039,7 @@ func TestVersionValidation(t *testing.T) {
 	assert.ErrorContains(t, err, "min resume version (2) cannot exceed version (1)")
 
 	// Negative MinResumeVersion.
-	_, err = executor.Run(context.Background(), &Pipeline{
+	_, err = executor.Run(t.Context(), &Pipeline{
 		Name:             "bad",
 		Version:          1,
 		MinResumeVersion: new(-1),
@@ -1067,14 +1067,14 @@ func TestVersionPollingResumeWithSameVersion(t *testing.T) {
 	executor := newTestExecutor(t, nil)
 
 	// First run — gets snooze.
-	state, err := executor.Run(context.Background(), p, RunState{})
+	state, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 	var snooze ErrSnooze
 	require.ErrorAs(t, err, &snooze)
 	assert.Equal(t, 2, state.Version)
 
 	// Resume with same version — should complete.
-	state, err = executor.Run(context.Background(), p, state)
+	state, err = executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 	assert.Equal(t, 2, state.Version)
@@ -1105,7 +1105,7 @@ func TestForceTerminate(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(context.Background(), p, state)
+	state, err := executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, state.Status)
 }

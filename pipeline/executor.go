@@ -180,6 +180,30 @@ func (e *Executor) executeSteps(
 				return state, ctx.Err()
 			}
 
+			// If this error originated inside a nested branch sub-path, that scope
+			// already handled and recorded it (set FailedStepPath, snapshotted, and
+			// either entered compensation or chose to skip it). Re-processing it here
+			// would re-attribute the failure to this branch step and redo that work:
+			//   - ErrCompensationFailed (nested compensation failed): the run is left
+			//     non-Running; re-entering the compensation block below would reset
+			//     CompensationIndex to the top and re-run already-completed
+			//     compensators (double compensation).
+			//   - a nested ErrNoCompensate step: the run stays Running, but the error
+			//     carries the real (deeper) step path; the ErrNoCompensate block below
+			//     would overwrite FailedStepPath with this branch step and snapshot
+			//     again, once per parent level.
+			// Propagate such errors unchanged. A genuine fresh failure at THIS level
+			// (action/poll/branch-decide/OnEnter) carries stepPath as its own path and
+			// leaves the run Running, so it is not caught here and still triggers
+			// compensation below.
+			if state.Status != RunStatusRunning {
+				return state, err
+			}
+			var nestedFail *ErrStepFailed
+			if errors.As(err, &nestedFail) && len(nestedFail.Path) > len(stepPath) {
+				return state, err
+			}
+
 			// Check if error should skip compensation (retryable error).
 			if errors.Is(err, ErrNoCompensate) {
 				e.Warnf("pipeline %q: step %q failed (no compensate): %v", p.Name, step.Name, err)
@@ -215,6 +239,15 @@ func (e *Executor) executeSteps(
 			}
 
 			return e.runCompensation(ctx, p, state, ds)
+		}
+
+		// A step nested in a branch may have failed and fully compensated,
+		// returning nil with a terminal/non-running status. In that case the run
+		// is already over, so stop instead of executing the remaining steps in
+		// this (parent) scope. The top-level Run guards this via a status check
+		// too, but nested scopes only see the nil error bubbling up.
+		if state.Status != RunStatusRunning {
+			return state, nil
 		}
 	}
 

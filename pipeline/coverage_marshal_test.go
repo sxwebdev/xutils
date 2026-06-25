@@ -24,7 +24,7 @@ func TestMarshalError_ActionCompletion(t *testing.T) {
 	p := &Pipeline{Name: "m1", Steps: []Step{
 		Action("a", func(_ context.Context, d DataAccessor) error { setBad(d); return nil }),
 	}}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, RunState{})
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 }
 
@@ -35,12 +35,12 @@ func TestMarshalError_NoCompensatePath(t *testing.T) {
 			return NoCompensate(errors.New("transient"))
 		}),
 	}}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, RunState{})
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 }
 
 func TestMarshalError_CancellationPath(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	p := &Pipeline{Name: "m3", Steps: []Step{
 		Action("a", func(c context.Context, d DataAccessor) error {
 			setBad(d)
@@ -59,7 +59,7 @@ func TestMarshalError_FailurePath(t *testing.T) {
 			return errors.New("boom")
 		}),
 	}}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, RunState{})
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 }
 
@@ -72,7 +72,7 @@ func TestMarshalError_PollSnooze(t *testing.T) {
 			return false, time.Millisecond, nil
 		}),
 	}}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, RunState{})
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 	_, isSnooze := errors.AsType[ErrSnooze](err)
 	require.False(t, isSnooze, "marshal error must surface, not ErrSnooze")
@@ -85,7 +85,7 @@ func TestMarshalError_PollComplete(t *testing.T) {
 			return true, 0, nil
 		}),
 	}}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, RunState{})
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 }
 
@@ -100,12 +100,12 @@ func TestMarshalError_RunCompletionViaEmptyBranch(t *testing.T) {
 			return "empty", nil
 		}, map[string][]Step{"empty": {}}),
 	}}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, RunState{})
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, RunState{})
 	require.Error(t, err)
 }
 
 func TestMarshalError_TopOfLoopCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	// Branch sets badJSON and cancels; the next top-level step's loop iteration
 	// hits the cancellation marshal branch.
 	p := &Pipeline{Name: "m8", Steps: []Step{
@@ -138,7 +138,7 @@ func TestMarshalError_CompensationStepFailure(t *testing.T) {
 		CompletedSteps:    []CompletedStep{{Path: []string{"a"}, HasCompensator: true}},
 		CompensationIndex: 0,
 	}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, state)
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, state)
 	require.Error(t, err)
 }
 
@@ -155,7 +155,7 @@ func TestMarshalError_CompensationStepSuccess(t *testing.T) {
 		CompletedSteps:    []CompletedStep{{Path: []string{"a"}, HasCompensator: true}},
 		CompensationIndex: 0,
 	}
-	_, err := newTestExecutor(t, nil).Run(context.Background(), p, state)
+	_, err := newTestExecutor(t, nil).Run(t.Context(), p, state)
 	require.Error(t, err)
 }
 
@@ -171,7 +171,7 @@ func TestSnapshotError_PollSnooze(t *testing.T) {
 			return false, time.Millisecond, nil
 		}),
 	}}
-	_, err := exec.Run(context.Background(), p, RunState{})
+	_, err := exec.Run(t.Context(), p, RunState{})
 	_, isSnooze := errors.AsType[ErrSnooze](err)
 	require.True(t, isSnooze, "snapshot error is logged, snooze still returned")
 }
@@ -186,7 +186,7 @@ func TestSnapshotError_PollComplete(t *testing.T) {
 			return true, 0, nil
 		}),
 	}}
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
 }
@@ -202,7 +202,7 @@ func TestSnapshotError_CompensationStepFailure(t *testing.T) {
 		})),
 		Action("b", func(_ context.Context, _ DataAccessor) error { return errors.New("boom") }),
 	}}
-	state, err := exec.Run(context.Background(), p, RunState{})
+	state, err := exec.Run(t.Context(), p, RunState{})
 	var cf *ErrCompensationFailed
 	require.True(t, errors.As(err, &cf))
 	assert.Equal(t, RunStatusCompensating, state.Status)
@@ -214,7 +214,7 @@ func TestExecuteStep_UnknownType(t *testing.T) {
 	// validate() rejects typeless steps, so this default arm is unreachable via
 	// Run; call executeStep directly to confirm the guard returns an error.
 	e := NewExecutor()
-	_, err := e.executeStep(context.Background(), &Pipeline{Name: "p"}, RunState{}, newDataStore(),
+	_, err := e.executeStep(t.Context(), &Pipeline{Name: "p"}, RunState{}, newDataStore(),
 		&Step{Name: "x"}, []string{"x"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no action")
@@ -232,7 +232,7 @@ func TestRunCompensation_FinalMarshalError(t *testing.T) {
 		CompletedSteps:    []CompletedStep{{Path: []string{"a"}, HasCompensator: false}},
 		CompensationIndex: 0,
 	}
-	_, err := e.runCompensation(context.Background(), &Pipeline{Name: "p"}, state, ds)
+	_, err := e.runCompensation(t.Context(), &Pipeline{Name: "p"}, state, ds)
 	require.Error(t, err)
 }
 
@@ -248,7 +248,7 @@ func TestSnapshotError_NoCompensate(t *testing.T) {
 			return NoCompensate(errors.New("transient"))
 		}),
 	}}
-	_, err := exec.Run(context.Background(), p, RunState{})
+	_, err := exec.Run(t.Context(), p, RunState{})
 	require.ErrorIs(t, err, ErrNoCompensate, "NoCompensate propagates despite snapshot error")
 }
 
@@ -281,7 +281,7 @@ func TestCompensationMalformedPaths(t *testing.T) {
 		},
 		CompensationIndex: 3,
 	}
-	out, err := newTestExecutor(t, nil).Run(context.Background(), p, state)
+	out, err := newTestExecutor(t, nil).Run(t.Context(), p, state)
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusFailed, out.Status)
 	assert.Equal(t, 1, compReal, "real compensator runs; unresolvable paths are skipped")

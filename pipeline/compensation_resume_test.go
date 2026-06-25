@@ -41,7 +41,7 @@ func TestResumeCompensation_AtIndexZeroDoesNotDoubleCompensate(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	_, err := executor.Run(context.Background(), p, state)
+	_, err := executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, comp1, "step1 (index 0) must be compensated exactly once")
@@ -78,7 +78,7 @@ func TestResumeCompensation_AllDoneOnlyFinalizes(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	out, err := executor.Run(context.Background(), p, state)
+	out, err := executor.Run(t.Context(), p, state)
 	require.NoError(t, err)
 	require.Equal(t, RunStatusFailed, out.Status)
 	require.Equal(t, 0, comp1)

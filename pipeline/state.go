@@ -58,8 +58,10 @@ type RunState struct {
 	// PollStartedAt records when the current poll step began (for MaxDuration).
 	PollStartedAt *time.Time `json:"poll_started_at,omitempty"`
 
-	// CompensationIndex tracks which completed step we're compensating next.
-	// -1 means compensation hasn't started iterating yet.
+	// CompensationIndex is the next completed-step index to compensate (walked in
+	// reverse). -1 means every completed step has already been compensated and
+	// only finalization remains. The executor stamps it to len(CompletedSteps)-1
+	// when compensation begins.
 	CompensationIndex int `json:"compensation_index,omitempty"`
 }
 
