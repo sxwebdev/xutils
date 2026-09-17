@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sxwebdev/xutils/pipeline"
 )
@@ -291,5 +292,193 @@ func TestAlreadyCanceledContextDoesNotSnapshotOrRun(t *testing.T) {
 	}
 	if snapshots != 0 || actions != 0 || state.Status != pipeline.RunStatusNew {
 		t.Fatalf("snapshots/actions/status = (%d, %d, %q), want (0, 0, new)", snapshots, actions, state.Status)
+	}
+}
+
+func TestSnapshotFailureOnPipelineCompletionIsReturned(t *testing.T) {
+	cause := errors.New("storage down")
+	var snapshots, actions int
+	p := &pipeline.Pipeline{Name: "completion_snapshot", Steps: []pipeline.Step{
+		pipeline.Action("effect", func(context.Context, pipeline.DataAccessor) error {
+			actions++
+			return nil
+		}),
+	}}
+	executor := pipeline.NewExecutor(pipeline.WithSnapshotFn(func(context.Context, pipeline.RunState) error {
+		snapshots++
+		if snapshots == 3 { // transition, action completion, pipeline completion
+			return cause
+		}
+		return nil
+	}))
+
+	state, err := executor.Run(t.Context(), p, pipeline.RunState{})
+	snapshotErr, ok := errors.AsType[*pipeline.ErrSnapshotFailed](err)
+	if !ok || !errors.Is(err, cause) {
+		t.Fatalf("error = %T %v, want pipeline completion snapshot failure", err, err)
+	}
+	if snapshotErr.Operation != "pipeline completion" {
+		t.Fatalf("operation = %q, want pipeline completion", snapshotErr.Operation)
+	}
+	if actions != 1 || state.Status != pipeline.RunStatusCompleted {
+		t.Fatalf("actions/status = (%d, %q), want (1, completed)", actions, state.Status)
+	}
+}
+
+func TestSnapshotFailureOnEmptyBranchCompletionIsReturned(t *testing.T) {
+	cause := errors.New("storage down")
+	var decisions, snapshots int
+	p := &pipeline.Pipeline{Name: "empty_branch_snapshot", Steps: []pipeline.Step{
+		pipeline.Branch("route", func(context.Context, pipeline.DataAccessor) (string, error) {
+			decisions++
+			return "empty", nil
+		}, map[string][]pipeline.Step{"empty": {}}),
+	}}
+	executor := pipeline.NewExecutor(pipeline.WithSnapshotFn(func(context.Context, pipeline.RunState) error {
+		snapshots++
+		if snapshots == 2 { // transition, empty branch completion
+			return cause
+		}
+		return nil
+	}))
+
+	state, err := executor.Run(t.Context(), p, pipeline.RunState{})
+	snapshotErr, ok := errors.AsType[*pipeline.ErrSnapshotFailed](err)
+	if !ok || !errors.Is(err, cause) {
+		t.Fatalf("error = %T %v, want empty branch snapshot failure", err, err)
+	}
+	if snapshotErr.Operation != "empty branch completion" {
+		t.Fatalf("operation = %q, want empty branch completion", snapshotErr.Operation)
+	}
+	if decisions != 1 || state.Status != pipeline.RunStatusRunning {
+		t.Fatalf("decisions/status = (%d, %q), want (1, running)", decisions, state.Status)
+	}
+}
+
+func TestSnapshotFailureOnBranchDecisionPreventsChild(t *testing.T) {
+	cause := errors.New("storage down")
+	var decisions, children, snapshots int
+	p := &pipeline.Pipeline{Name: "branch_decision_snapshot", Steps: []pipeline.Step{
+		pipeline.Branch("route", func(context.Context, pipeline.DataAccessor) (string, error) {
+			decisions++
+			return "selected", nil
+		}, map[string][]pipeline.Step{
+			"selected": {
+				pipeline.Action("child", func(context.Context, pipeline.DataAccessor) error {
+					children++
+					return nil
+				}),
+			},
+		}),
+	}}
+	executor := pipeline.NewExecutor(pipeline.WithSnapshotFn(func(context.Context, pipeline.RunState) error {
+		snapshots++
+		if snapshots == 2 { // transition, branch decision
+			return cause
+		}
+		return nil
+	}))
+
+	_, err := executor.Run(t.Context(), p, pipeline.RunState{})
+	snapshotErr, ok := errors.AsType[*pipeline.ErrSnapshotFailed](err)
+	if !ok || !errors.Is(err, cause) {
+		t.Fatalf("error = %T %v, want branch decision snapshot failure", err, err)
+	}
+	if snapshotErr.Operation != "branch decision" {
+		t.Fatalf("operation = %q, want branch decision", snapshotErr.Operation)
+	}
+	if decisions != 1 || children != 0 {
+		t.Fatalf("decisions/children = (%d, %d), want (1, 0)", decisions, children)
+	}
+}
+
+func TestSnapshotFailureOnRepeatCompletionPreventsNextStep(t *testing.T) {
+	cause := errors.New("storage down")
+	var conditions, after, snapshots int
+	p := &pipeline.Pipeline{Name: "repeat_completion_snapshot", Steps: []pipeline.Step{
+		pipeline.Repeat("loop", nil, func(context.Context, pipeline.DataAccessor, int) (bool, time.Duration, error) {
+			conditions++
+			return true, 0, nil
+		}),
+		pipeline.Action("after", func(context.Context, pipeline.DataAccessor) error {
+			after++
+			return nil
+		}),
+	}}
+	executor := pipeline.NewExecutor(pipeline.WithSnapshotFn(func(context.Context, pipeline.RunState) error {
+		snapshots++
+		if snapshots == 2 { // transition, repeat completion
+			return cause
+		}
+		return nil
+	}))
+
+	state, err := executor.Run(t.Context(), p, pipeline.RunState{})
+	snapshotErr, ok := errors.AsType[*pipeline.ErrSnapshotFailed](err)
+	if !ok || !errors.Is(err, cause) {
+		t.Fatalf("error = %T %v, want repeat completion snapshot failure", err, err)
+	}
+	if snapshotErr.Operation != "repeat completion" {
+		t.Fatalf("operation = %q, want repeat completion", snapshotErr.Operation)
+	}
+	if conditions != 1 || after != 0 || state.Status != pipeline.RunStatusRunning {
+		t.Fatalf("conditions/after/status = (%d, %d, %q), want (1, 0, running)", conditions, after, state.Status)
+	}
+}
+
+func TestCancellationAfterResumeSnapshotPreventsCompensator(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	var compensations int
+	p := &pipeline.Pipeline{Name: "cancel_before_compensator", Steps: []pipeline.Step{
+		pipeline.Action("effect", func(context.Context, pipeline.DataAccessor) error { return nil },
+			pipeline.WithCompensate(func(context.Context, pipeline.DataAccessor) error {
+				compensations++
+				return nil
+			})),
+	}}
+	state := pipeline.RunState{
+		Status:            pipeline.RunStatusCompensating,
+		Error:             "original failure",
+		CompletedSteps:    []pipeline.CompletedStep{{Path: []string{"effect"}, HasCompensator: true}},
+		CompensationIndex: 0,
+	}
+	executor := pipeline.NewExecutor(pipeline.WithSnapshotFn(func(context.Context, pipeline.RunState) error {
+		cancel()
+		return nil
+	}))
+
+	state, err := executor.Run(ctx, p, state)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if compensations != 0 || state.Status != pipeline.RunStatusCompensating || state.CompensationIndex != 0 {
+		t.Fatalf("compensations/status/index = (%d, %q, %d), want (0, compensating, 0)", compensations, state.Status, state.CompensationIndex)
+	}
+}
+
+func TestCompensatorCancellationLeavesCompensationResumable(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	var compensations int
+	p := &pipeline.Pipeline{Name: "cancel_in_compensator", Steps: []pipeline.Step{
+		pipeline.Action("effect", func(context.Context, pipeline.DataAccessor) error { return nil },
+			pipeline.WithCompensate(func(ctx context.Context, _ pipeline.DataAccessor) error {
+				compensations++
+				cancel()
+				return ctx.Err()
+			})),
+	}}
+	state := pipeline.RunState{
+		Status:            pipeline.RunStatusCompensating,
+		Error:             "original failure",
+		CompletedSteps:    []pipeline.CompletedStep{{Path: []string{"effect"}, HasCompensator: true}},
+		CompensationIndex: 0,
+	}
+
+	state, err := pipeline.NewExecutor().Run(ctx, p, state)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if compensations != 1 || state.Status != pipeline.RunStatusCompensating || state.CompensationIndex != 0 {
+		t.Fatalf("compensations/status/index = (%d, %q, %d), want (1, compensating, 0)", compensations, state.Status, state.CompensationIndex)
 	}
 }

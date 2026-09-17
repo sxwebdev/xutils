@@ -291,6 +291,20 @@ func TestStepPathKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestRetryAfterWithoutCause(t *testing.T) {
+	err := pipeline.RetryAfter(2*time.Second, nil)
+	retryAfter, ok := errors.AsType[*pipeline.ErrRetryAfter](err)
+	if !ok {
+		t.Fatalf("error = %T, want *ErrRetryAfter", err)
+	}
+	if got, want := retryAfter.Error(), "pipeline: retry after 2s"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if retryAfter.Unwrap() != nil {
+		t.Fatalf("unwrap = %v, want nil", retryAfter.Unwrap())
+	}
+}
+
 func TestRetryAfterFromEveryForwardCallback(t *testing.T) {
 	cause := errors.New("wait")
 	tests := []struct {

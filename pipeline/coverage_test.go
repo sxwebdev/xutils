@@ -396,6 +396,11 @@ func TestValidationErrors(t *testing.T) {
 				"x": {{Name: "bad"}}, // no type
 			}),
 		}}},
+		{"invalid nested repeat step", &Pipeline{Name: "p", Steps: []Step{
+			Repeat("a", []Step{{Name: "bad"}}, func(context.Context, DataAccessor, int) (bool, time.Duration, error) {
+				return true, 0, nil
+			}),
+		}}},
 	}
 
 	exec := newTestExecutor(t, nil)

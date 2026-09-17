@@ -297,6 +297,9 @@ func TestCompensationMalformedPaths(t *testing.T) {
 		})),
 		Branch("b", func(_ context.Context, _ DataAccessor) (string, error) { return "x", nil },
 			map[string][]Step{"x": {Action("inner", okAction)}}),
+		Repeat("r", []Step{Action("inner", okAction)}, func(context.Context, DataAccessor, int) (bool, time.Duration, error) {
+			return true, 0, nil
+		}),
 	}}
 
 	// Completed steps whose paths resolve to nothing — findStepByPath must
@@ -304,6 +307,7 @@ func TestCompensationMalformedPaths(t *testing.T) {
 	//   - []:                       empty path
 	//   - ["real","sub"]:           "real" is not a branch, 2-element path has no step
 	//   - ["b","ghostkey","inner"]: the branch path key no longer exists
+	//   - ["r","bad","inner"]:      the repeat iteration is not numeric
 	state := RunState{
 		Status: RunStatusCompensating,
 		Error:  "orig",
@@ -312,8 +316,9 @@ func TestCompensationMalformedPaths(t *testing.T) {
 			{Path: []string{}, HasCompensator: true},
 			{Path: []string{"real", "sub"}, HasCompensator: true},
 			{Path: []string{"b", "ghostkey", "inner"}, HasCompensator: true},
+			{Path: []string{"r", "bad", "inner"}, HasCompensator: true},
 		},
-		CompensationIndex: 3,
+		CompensationIndex: 4,
 	}
 	out, err := newTestExecutor(t, nil).Run(t.Context(), p, state)
 	require.NoError(t, err)
