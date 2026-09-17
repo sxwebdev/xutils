@@ -17,11 +17,13 @@ func TestResumeCompensation_AtIndexZeroDoesNotDoubleCompensate(t *testing.T) {
 	p := &Pipeline{
 		Name: "repro",
 		Steps: []Step{
-			Action("step1",
+			Action(
+				"step1",
 				func(_ context.Context, _ DataAccessor) error { return nil },
 				WithCompensate(func(_ context.Context, _ DataAccessor) error { comp1++; return nil }),
 			),
-			Action("step2",
+			Action(
+				"step2",
 				func(_ context.Context, _ DataAccessor) error { return nil },
 				WithCompensate(func(_ context.Context, _ DataAccessor) error { comp2++; return nil }),
 			),
@@ -56,11 +58,13 @@ func TestResumeCompensation_AllDoneOnlyFinalizes(t *testing.T) {
 	p := &Pipeline{
 		Name: "repro2",
 		Steps: []Step{
-			Action("step1",
+			Action(
+				"step1",
 				func(_ context.Context, _ DataAccessor) error { return nil },
 				WithCompensate(func(_ context.Context, _ DataAccessor) error { comp1++; return nil }),
 			),
-			Action("step2",
+			Action(
+				"step2",
 				func(_ context.Context, _ DataAccessor) error { return nil },
 				WithCompensate(func(_ context.Context, _ DataAccessor) error { comp2++; return nil }),
 			),

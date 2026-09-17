@@ -42,7 +42,8 @@ func (c *captureLogger) Errorw(format string, a ...any) { c.record(format, a...)
 
 func TestWithLogger_IsWired(t *testing.T) {
 	logger := &captureLogger{}
-	l := loopper.New(func(context.Context) { panic("boom") },
+	l := loopper.New(
+		func(context.Context) { panic("boom") },
 		loopper.WithLogger(logger),
 		loopper.WithLeading(),
 		loopper.WithPeriod(time.Hour),
@@ -59,7 +60,8 @@ func TestWithLogger_IsWired(t *testing.T) {
 func TestWithLogger_NilIsIgnored(t *testing.T) {
 	var runs atomic.Int64
 	// Passing nil must not override the default logger nor cause a nil deref.
-	l := loopper.New(func(context.Context) { runs.Add(1) },
+	l := loopper.New(
+		func(context.Context) { runs.Add(1) },
 		loopper.WithLogger(nil),
 		loopper.WithLeading(),
 		loopper.WithPeriod(time.Hour),
@@ -75,7 +77,8 @@ func TestWithPeriod_NonPositiveIsIgnored(t *testing.T) {
 	// If WithPeriod(0) were honored, Start would panic in time.NewTicker(0).
 	for _, d := range []time.Duration{0, -time.Second} {
 		var runs atomic.Int64
-		l := loopper.New(func(context.Context) { runs.Add(1) },
+		l := loopper.New(
+			func(context.Context) { runs.Add(1) },
 			loopper.WithLeading(),
 			loopper.WithPeriod(d),
 		)

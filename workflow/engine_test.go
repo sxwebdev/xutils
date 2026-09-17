@@ -217,11 +217,13 @@ func TestHooks_AllLevelsRun(t *testing.T) {
 	var order []string
 	add := func(s string) { order = append(order, s) }
 
-	step, _ := workflow.NewStep("s1", func(_ *workflow.StepContext) error { add("step"); return nil },
+	step, _ := workflow.NewStep(
+		"s1", func(_ *workflow.StepContext) error { add("step"); return nil },
 		workflow.WithStepBeforeFn(func(_ context.Context, _ *workflow.Step) error { add("step-before"); return nil }),
 		workflow.WithStepAfterFn(func(_ context.Context, _ *workflow.Step) error { add("step-after"); return nil }),
 	)
-	stage, _ := workflow.NewStage("stage",
+	stage, _ := workflow.NewStage(
+		"stage",
 		workflow.WithStageSteps([]*workflow.Step{step}),
 		workflow.WithStageBeforeFn(func(_ context.Context, _ *workflow.Stage) error { add("stage-before"); return nil }),
 		workflow.WithStageAfterFn(func(_ context.Context, _ *workflow.Stage) error { add("stage-after"); return nil }),

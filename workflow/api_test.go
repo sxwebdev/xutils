@@ -50,7 +50,8 @@ func TestStep_Setters(t *testing.T) {
 }
 
 func TestStepOptions_ArgsAndKind(t *testing.T) {
-	s, _ := workflow.NewStep("s", func(_ *workflow.StepContext) error { return nil },
+	s, _ := workflow.NewStep(
+		"s", func(_ *workflow.StepContext) error { return nil },
 		workflow.WithStepArgs(map[string]int{"a": 1}),
 		workflow.WithStepKind("http"),
 	)

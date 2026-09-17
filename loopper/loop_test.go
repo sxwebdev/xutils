@@ -18,7 +18,8 @@ func TestNew_PanicsOnNilFn(t *testing.T) {
 
 func TestLeading_RunsImmediately(t *testing.T) {
 	var runs atomic.Int64
-	l := loopper.New(func(context.Context) { runs.Add(1) },
+	l := loopper.New(
+		func(context.Context) { runs.Add(1) },
 		loopper.WithLeading(),
 		loopper.WithPeriod(time.Hour), // ticker won't fire during the test
 	)
@@ -32,7 +33,8 @@ func TestLeading_RunsImmediately(t *testing.T) {
 
 func TestNonLeading_FirstRunAfterPeriod(t *testing.T) {
 	var runs atomic.Int64
-	l := loopper.New(func(context.Context) { runs.Add(1) },
+	l := loopper.New(
+		func(context.Context) { runs.Add(1) },
 		loopper.WithPeriod(60*time.Millisecond),
 	)
 	l.Start(t.Context())
@@ -84,7 +86,8 @@ func TestOverlapPrevention(t *testing.T) {
 func TestTrigger_TrueWhenIdle(t *testing.T) {
 	var runs atomic.Int64
 	done := make(chan struct{}, 1)
-	l := loopper.New(func(context.Context) { runs.Add(1); done <- struct{}{} },
+	l := loopper.New(
+		func(context.Context) { runs.Add(1); done <- struct{}{} },
 		loopper.WithPeriod(time.Hour),
 	)
 	l.Start(t.Context())
@@ -114,7 +117,8 @@ func TestPanicRecovery_LoopContinues(t *testing.T) {
 
 func TestStop_StopsScheduling(t *testing.T) {
 	var runs atomic.Int64
-	l := loopper.New(func(context.Context) { runs.Add(1) },
+	l := loopper.New(
+		func(context.Context) { runs.Add(1) },
 		loopper.WithPeriod(20*time.Millisecond),
 	)
 	l.Start(t.Context())
@@ -182,7 +186,8 @@ func TestNoContextTimeout_WhenZero(t *testing.T) {
 func TestTrigger_BeforeStart(t *testing.T) {
 	var runs atomic.Int64
 	done := make(chan struct{}, 1)
-	l := loopper.New(func(context.Context) { runs.Add(1); done <- struct{}{} },
+	l := loopper.New(
+		func(context.Context) { runs.Add(1); done <- struct{}{} },
 		loopper.WithPeriod(time.Hour),
 	)
 	require.True(t, l.Trigger(t.Context()), "Trigger should work before Start")

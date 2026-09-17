@@ -41,7 +41,9 @@ func (m *mockCache) Keys(_ context.Context, _ []byte) ([]string, error) { return
 func (m *mockCache) KeysAndValues(_ context.Context, _ []byte) (map[string][]byte, error) {
 	return nil, nil
 }
-func (m *mockCache) GetFromJSON(_ context.Context, _ []byte, _ any) error              { return nil }
+
+func (m *mockCache) GetFromJSON(_ context.Context, _ []byte, _ any) error { return nil }
+
 func (m *mockCache) SetJSON(_ context.Context, _ []byte, _ any, _ time.Duration) error { return nil }
 
 func (m *mockCache) Exists(_ context.Context, key []byte) (bool, error) {
