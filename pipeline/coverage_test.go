@@ -50,8 +50,8 @@ func TestCompensationFailure(t *testing.T) {
 	exec := newTestExecutor(t, nil)
 	state, err := exec.Run(t.Context(), p, RunState{})
 
-	var cf *ErrCompensationFailed
-	require.True(t, errors.As(err, &cf), "must return ErrCompensationFailed")
+	cf, ok := errors.AsType[*ErrCompensationFailed](err)
+	require.True(t, ok, "must return ErrCompensationFailed")
 	assert.Contains(t, cf.Error(), "rollback boom")
 	assert.Contains(t, cf.Error(), "forward boom")
 	// Compensation did not finish, so the run stays in compensating (resumable).
@@ -174,7 +174,8 @@ func TestBranchOnEnterHookFires(t *testing.T) {
 	p := &Pipeline{
 		Name: "branch_on_enter",
 		Steps: []Step{
-			Branch("b", func(_ context.Context, _ DataAccessor) (string, error) { return "yes", nil },
+			Branch(
+				"b", func(_ context.Context, _ DataAccessor) (string, error) { return "yes", nil },
 				map[string][]Step{"yes": {Action("x", okAction)}},
 				WithOnEnter(func(_ context.Context, _ DataAccessor) error { entered = true; return nil }),
 			),
@@ -406,41 +407,36 @@ func TestValidationErrors(t *testing.T) {
 	}
 }
 
-// --- Snapshot errors must be logged but never abort the run ---
+// --- Snapshot errors are fatal to the current executor invocation ---
 
-func TestSnapshotErrorsAreNonFatal(t *testing.T) {
+func TestSnapshotFailureStopsBeforeNextStep(t *testing.T) {
+	snapshotCause := errors.New("snapshot unavailable")
+	var snapshots, first, second int
 	exec := NewExecutor(
 		WithLogger(&testLogger{t: t}),
 		WithSnapshotFn(func(_ context.Context, _ RunState) error {
-			return errors.New("snapshot unavailable")
+			snapshots++
+			if snapshots == 2 { // transition succeeds; action completion fails
+				return snapshotCause
+			}
+			return nil
 		}),
 	)
 
-	// Success path: action + completion snapshots both fail, run still completes.
-	okPipe := &Pipeline{
-		Name:  "snap_ok",
-		Steps: []Step{Action("a", okAction)},
-	}
-	state, err := exec.Run(t.Context(), okPipe, RunState{})
-	require.NoError(t, err)
-	assert.Equal(t, RunStatusCompleted, state.Status)
-
-	// Failure path: failure + compensation snapshots fail, compensation still runs.
-	var comp int
-	failPipe := &Pipeline{
-		Name: "snap_fail",
+	p := &Pipeline{
+		Name: "snap_stop",
 		Steps: []Step{
-			Action("a", okAction, WithCompensate(func(_ context.Context, _ DataAccessor) error {
-				comp++
-				return nil
-			})),
-			Action("b", func(_ context.Context, _ DataAccessor) error { return errors.New("boom") }),
+			Action("a", func(context.Context, DataAccessor) error { first++; return nil }),
+			Action("b", func(context.Context, DataAccessor) error { second++; return nil }),
 		},
 	}
-	state, err = exec.Run(t.Context(), failPipe, RunState{})
-	require.NoError(t, err)
-	assert.Equal(t, RunStatusFailed, state.Status)
-	assert.Equal(t, 1, comp, "compensation runs despite snapshot errors")
+	state, err := exec.Run(t.Context(), p, RunState{})
+	_, ok := errors.AsType[*ErrSnapshotFailed](err)
+	require.True(t, ok)
+	require.ErrorIs(t, err, snapshotCause)
+	assert.Equal(t, 1, first)
+	assert.Zero(t, second, "the next step must not run after a failed snapshot")
+	assert.Len(t, state.CompletedSteps, 1, "returned state includes uncommitted progress")
 }
 
 // --- findStepByPath edge cases via compensation in a branch ---

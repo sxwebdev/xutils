@@ -37,6 +37,7 @@ type RunState struct {
 	// CurrentPath is the position in the step tree.
 	// For linear steps: ["step_name"]
 	// For steps inside a branch: ["branch_name", "path_key", "step_name"]
+	// For steps inside a repeat: ["repeat_name", "iteration", "step_name"]
 	CurrentPath []string `json:"current_path"`
 
 	// CompletedSteps tracks which steps finished successfully (for compensation walk-back).
@@ -63,6 +64,39 @@ type RunState struct {
 	// only finalization remains. The executor stamps it to len(CompletedSteps)-1
 	// when compensation begins.
 	CompensationIndex int `json:"compensation_index,omitempty"`
+
+	// Revision is advanced after every successfully persisted snapshot. Storage
+	// implementations may use it for optimistic concurrency control.
+	Revision uint64 `json:"revision,omitempty"`
+
+	// StepDiagnostics contains optional aggregate execution metadata keyed by a
+	// stable JSON-pointer-like full step path (see StepPathKey).
+	StepDiagnostics map[string]StepDiagnostics `json:"step_diagnostics,omitempty"`
+
+	// RepeatStates records the current zero-based iteration for active and
+	// completed Repeat steps, keyed by the Repeat step's full path.
+	RepeatStates map[string]RepeatState `json:"repeat_states,omitempty"`
+}
+
+// StepDiagnostics is aggregate diagnostic metadata for a step. It is
+// informational only and never controls pipeline execution.
+type StepDiagnostics struct {
+	Attempts       int        `json:"attempts,omitempty"`
+	FirstStartedAt *time.Time `json:"first_started_at,omitempty"`
+	LastStartedAt  *time.Time `json:"last_started_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	LastError      string     `json:"last_error,omitempty"`
+	NextRunAt      *time.Time `json:"next_run_at,omitempty"`
+}
+
+// RepeatState is resumable state for a Repeat step.
+type RepeatState struct {
+	// Iteration is the current zero-based iteration.
+	Iteration int `json:"iteration,omitempty"`
+	// AwaitingCondition means nested steps completed and Until is next.
+	AwaitingCondition bool `json:"awaiting_condition,omitempty"`
+	// Completed indicates the Repeat itself completed.
+	Completed bool `json:"completed,omitempty"`
 }
 
 // CompletedStep records a step that finished successfully.

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sxwebdev/xutils/loggerutil"
@@ -13,9 +15,10 @@ import (
 // Executor runs a Pipeline with persistence and compensation support.
 // It is stateless — all state is passed in and returned via RunState.
 type Executor struct {
-	logger     loggerutil.Logger
-	debug      bool
-	snapshotFn SnapshotFunc
+	logger        loggerutil.Logger
+	debug         bool
+	snapshotFn    SnapshotFunc
+	casSnapshotFn CASSnapshotFunc
 }
 
 // NewExecutor creates a new Executor with the given options.
@@ -37,7 +40,9 @@ func NewExecutor(opts ...ExecutorOption) *Executor {
 // Returns:
 //   - Updated RunState (always valid, should be persisted)
 //   - nil if pipeline completed or failed (check state.Status)
-//   - ErrSnooze if a poll step is waiting (caller should re-invoke after Duration)
+//   - ErrRetryAfter if any callback requested a scheduler-neutral continuation
+//   - ErrSnooze if a poll step is waiting (legacy-compatible scheduling signal)
+//   - ErrSnapshotFailed if persistence failed; no subsequent callback was run
 //   - ctx.Err() if the context is cancelled; the run is left resumable (not
 //     compensated), so persisting and re-invoking later continues from the
 //     interrupted step
@@ -68,14 +73,39 @@ func (e *Executor) Run(ctx context.Context, p *Pipeline, state RunState) (RunSta
 	if state.Data != nil {
 		ds.restoreData(state.Data)
 	}
+	if ctx.Err() != nil {
+		return state, ctx.Err()
+	}
 
 	// If compensating, continue compensation.
 	if state.Status == RunStatusCompensating {
+		data, marshalErr := ds.marshalData()
+		if marshalErr != nil {
+			return state, marshalErr
+		}
+		state.Data = data
+		if snapshotErr := e.snapshot(ctx, &state, "resume compensation"); snapshotErr != nil {
+			return state, snapshotErr
+		}
 		return e.runCompensation(ctx, p, state, ds)
 	}
 
-	// Set status to running.
+	// Persist status transitions before invoking any callback. This ensures a
+	// failed initial snapshot cannot be followed by an external side effect.
+	previousStatus := state.Status
 	state.Status = RunStatusRunning
+	data, marshalErr := ds.marshalData()
+	if marshalErr != nil {
+		return state, marshalErr
+	}
+	state.Data = data
+	operation := "resume execution"
+	if previousStatus != RunStatusRunning {
+		operation = "transition to running"
+	}
+	if snapshotErr := e.snapshot(ctx, &state, operation); snapshotErr != nil {
+		return state, snapshotErr
+	}
 
 	// Find the starting index at the top level.
 	startIdx := e.findTopLevelIndex(p.Steps, state.CurrentPath)
@@ -99,8 +129,8 @@ func (e *Executor) Run(ctx context.Context, p *Pipeline, state RunState) (RunSta
 		}
 		state.Data = data
 
-		if snapshotErr := e.snapshot(ctx, state); snapshotErr != nil {
-			e.Errorf("pipeline %q: snapshot on completion: %v", p.Name, snapshotErr)
+		if snapshotErr := e.snapshot(ctx, &state, "pipeline completion"); snapshotErr != nil {
+			return state, snapshotErr
 		}
 
 		e.Infof("pipeline %q: completed successfully", p.Name)
@@ -160,8 +190,15 @@ func (e *Executor) executeSteps(
 		var err error
 		state, err = e.executeStep(ctx, p, state, ds, step, stepPath)
 		if err != nil {
-			// ErrSnooze — poll step waiting, return to caller.
-			if _, ok := errors.AsType[ErrSnooze](err); ok {
+			// Persistence failures are engine failures, not step failures. Never
+			// compensate or run another callback after one occurs.
+			if _, ok := errors.AsType[*ErrSnapshotFailed](err); ok {
+				return state, err
+			}
+
+			// Delayed continuation has already been snapshotted by the callback
+			// handler that owns the exact step path. Propagate it unchanged.
+			if isDeferred(err) {
 				return state, err
 			}
 
@@ -199,8 +236,7 @@ func (e *Executor) executeSteps(
 			if state.Status != RunStatusRunning {
 				return state, err
 			}
-			var nestedFail *ErrStepFailed
-			if errors.As(err, &nestedFail) && len(nestedFail.Path) > len(stepPath) {
+			if nestedFail, ok := errors.AsType[*ErrStepFailed](err); ok && len(nestedFail.Path) > len(stepPath) {
 				return state, err
 			}
 
@@ -214,8 +250,8 @@ func (e *Executor) executeSteps(
 				state.Data = data
 				state.FailedStepPath = stepPath
 
-				if snapshotErr := e.snapshot(ctx, state); snapshotErr != nil {
-					e.Errorf("pipeline %q: snapshot on retryable error: %v", p.Name, snapshotErr)
+				if snapshotErr := e.snapshot(ctx, &state, "step error without compensation"); snapshotErr != nil {
+					return state, snapshotErr
 				}
 
 				return state, err
@@ -234,8 +270,8 @@ func (e *Executor) executeSteps(
 			}
 			state.Data = data
 
-			if snapshotErr := e.snapshot(ctx, state); snapshotErr != nil {
-				e.Errorf("pipeline %q: snapshot on failure: %v", p.Name, snapshotErr)
+			if snapshotErr := e.snapshot(ctx, &state, "step failure before compensation"); snapshotErr != nil {
+				return state, snapshotErr
 			}
 
 			return e.runCompensation(ctx, p, state, ds)
@@ -267,26 +303,33 @@ func (e *Executor) executeStep(
 	// Run OnEnter hook.
 	if step.OnEnter != nil {
 		if err := step.OnEnter(ctx, ds); err != nil {
-			return state, &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: fmt.Errorf("on_enter: %w", err)}
+			e.recordAttempt(&state, stepPath)
+			e.recordError(&state, stepPath, err)
+			stepErr := &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: fmt.Errorf("on_enter: %w", err)}
+			if isDeferred(stepErr) {
+				return e.persistDeferred(ctx, state, ds, stepPath, stepErr, false)
+			}
+			return state, stepErr
 		}
 	}
 
 	switch {
 	case step.Action != nil:
-		return e.executeAction(ctx, p, state, ds, step, stepPath)
+		return e.executeAction(ctx, state, ds, step, stepPath)
 	case step.Poll != nil:
-		return e.executePoll(ctx, p, state, ds, step, stepPath)
+		return e.executePoll(ctx, state, ds, step, stepPath)
 	case step.Branch != nil:
 		return e.executeBranch(ctx, p, state, ds, step, stepPath)
+	case step.Repeat != nil:
+		return e.executeRepeat(ctx, p, state, ds, step, stepPath)
 	default:
-		return state, fmt.Errorf("pipeline: step %q has no action, poll, or branch", step.Name)
+		return state, fmt.Errorf("pipeline: step %q has no action, poll, branch, or repeat", step.Name)
 	}
 }
 
 // executeAction runs an action step with optional retry.
 func (e *Executor) executeAction(
 	ctx context.Context,
-	p *Pipeline,
 	state RunState,
 	ds *dataStore,
 	step *Step,
@@ -295,10 +338,19 @@ func (e *Executor) executeAction(
 	e.Debugf("action step: %s", step.Name)
 
 	err := e.runWithRetry(ctx, step, func() error {
-		return step.Action.Do(ctx, ds)
+		e.recordAttempt(&state, stepPath)
+		err := step.Action.Do(ctx, ds)
+		if err != nil {
+			e.recordError(&state, stepPath, err)
+		}
+		return err
 	})
 	if err != nil {
-		return state, &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: err}
+		stepErr := &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: err}
+		if isDeferred(stepErr) {
+			return e.persistDeferred(ctx, state, ds, stepPath, stepErr, false)
+		}
+		return state, stepErr
 	}
 
 	// Record completion.
@@ -312,10 +364,11 @@ func (e *Executor) executeAction(
 		return state, marshalErr
 	}
 	state.Data = data
+	e.recordCompleted(&state, stepPath)
 	e.Infof("step %q completed", step.Name)
 
-	if err := e.snapshot(ctx, state); err != nil {
-		e.Errorf("pipeline %q: snapshot after action: %v", p.Name, err)
+	if err := e.snapshot(ctx, &state, "action completion"); err != nil {
+		return state, err
 	}
 
 	return state, nil
@@ -324,7 +377,6 @@ func (e *Executor) executeAction(
 // executePoll runs a poll step, returning ErrSnooze if not done.
 func (e *Executor) executePoll(
 	ctx context.Context,
-	p *Pipeline,
 	state RunState,
 	ds *dataStore,
 	step *Step,
@@ -343,35 +395,36 @@ func (e *Executor) executePoll(
 		elapsed := now.Sub(*state.PollStartedAt)
 		if elapsed >= step.Poll.MaxDuration {
 			state.PollStartedAt = nil
+			e.recordAttempt(&state, stepPath)
+			timeoutErr := &ErrPollTimeout{StepName: step.Name, MaxDuration: step.Poll.MaxDuration}
+			e.recordError(&state, stepPath, timeoutErr)
 			return state, &ErrStepFailed{
 				StepName: step.Name,
 				Path:     stepPath,
-				Err:      &ErrPollTimeout{StepName: step.Name, MaxDuration: step.Poll.MaxDuration},
+				Err:      timeoutErr,
 			}
 		}
 	}
 
+	e.recordAttempt(&state, stepPath)
 	done, retryAfter, err := step.Poll.Check(ctx, ds)
 	if err != nil {
-		state.PollStartedAt = nil
-		return state, &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: err}
+		e.recordError(&state, stepPath, err)
+		stepErr := &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: err}
+		if isDeferred(stepErr) {
+			return e.persistDeferred(ctx, state, ds, stepPath, stepErr, true)
+		}
+		if ctx.Err() == nil {
+			state.PollStartedAt = nil
+		}
+		return state, stepErr
 	}
 
 	if !done {
 		// Save state and return snooze.
 		state.Status = RunStatusPolling
 
-		data, marshalErr := ds.marshalData()
-		if marshalErr != nil {
-			return state, marshalErr
-		}
-		state.Data = data
-
-		if err := e.snapshot(ctx, state); err != nil {
-			e.Errorf("pipeline %q: snapshot on poll snooze: %v", p.Name, err)
-		}
-
-		return state, ErrSnooze{Duration: retryAfter}
+		return e.persistDeferred(ctx, state, ds, stepPath, ErrSnooze{Duration: retryAfter}, true)
 	}
 
 	// Poll completed.
@@ -388,10 +441,11 @@ func (e *Executor) executePoll(
 		return state, marshalErr
 	}
 	state.Data = data
+	e.recordCompleted(&state, stepPath)
 	e.Infof("poll step %q completed", step.Name)
 
-	if err := e.snapshot(ctx, state); err != nil {
-		e.Errorf("pipeline %q: snapshot after poll: %v", p.Name, err)
+	if err := e.snapshot(ctx, &state, "poll completion"); err != nil {
+		return state, err
 	}
 
 	return state, nil
@@ -445,18 +499,26 @@ func (e *Executor) executeBranch(
 	e.Debugf("branch step: %s (deciding)", step.Name)
 
 	var err error
+	e.recordAttempt(&state, stepPath)
 	chosenPath, err = step.Branch.Decide(ctx, ds)
 	if err != nil {
-		return state, &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: fmt.Errorf("decide: %w", err)}
+		e.recordError(&state, stepPath, err)
+		stepErr := &ErrStepFailed{StepName: step.Name, Path: stepPath, Err: fmt.Errorf("decide: %w", err)}
+		if isDeferred(stepErr) {
+			return e.persistDeferred(ctx, state, ds, stepPath, stepErr, false)
+		}
+		return state, stepErr
 	}
 
 	pathSteps, ok := step.Branch.Paths[chosenPath]
 	if !ok {
-		return state, &ErrStepFailed{
+		stepErr := &ErrStepFailed{
 			StepName: step.Name,
 			Path:     stepPath,
 			Err:      fmt.Errorf("branch returned unknown path %q (available: %v)", chosenPath, branchPathNames(step.Branch)),
 		}
+		e.recordError(&state, stepPath, stepErr.Err)
+		return state, stepErr
 	}
 
 	e.Infof("branch %q chose path %q", step.Name, chosenPath)
@@ -466,14 +528,128 @@ func (e *Executor) executeBranch(
 		Path:           slices.Clone(stepPath),
 		HasCompensator: false,
 	})
+	e.recordCompleted(&state, stepPath)
 
 	if len(pathSteps) == 0 {
-		// Empty path — skip.
+		state.CurrentPath = slices.Clone(stepPath)
+		data, marshalErr := ds.marshalData()
+		if marshalErr != nil {
+			return state, marshalErr
+		}
+		state.Data = data
+		if err := e.snapshot(ctx, &state, "empty branch completion"); err != nil {
+			return state, err
+		}
 		return state, nil
 	}
 
 	childPath := append(slices.Clone(stepPath), chosenPath)
+	state.CurrentPath = slices.Clone(childPath)
+	data, marshalErr := ds.marshalData()
+	if marshalErr != nil {
+		return state, marshalErr
+	}
+	state.Data = data
+	if err := e.snapshot(ctx, &state, "branch decision"); err != nil {
+		return state, err
+	}
 	return e.executeSteps(ctx, p, state, ds, pathSteps, 0, childPath)
+}
+
+// executeRepeat executes or resumes one iteration. An unfinished repeat always
+// yields after its Until callback, even for a zero delay, which makes unbounded
+// repeats scheduler-neutral and prevents synchronous runaway loops.
+func (e *Executor) executeRepeat(
+	ctx context.Context,
+	p *Pipeline,
+	state RunState,
+	ds *dataStore,
+	step *Step,
+	stepPath []string,
+) (RunState, error) {
+	repeatKey := StepPathKey(stepPath)
+	iteration := 0
+	childStartIdx := 0
+	awaitingCondition := false
+
+	if len(state.CurrentPath) > len(stepPath) {
+		savedIteration := state.CurrentPath[len(stepPath)]
+		parsed, err := strconv.Atoi(savedIteration)
+		if err != nil || parsed < 0 {
+			return state, &ErrStepFailed{
+				StepName: step.Name,
+				Path:     slices.Clone(stepPath),
+				Err:      fmt.Errorf("invalid saved repeat iteration %q", savedIteration),
+			}
+		}
+		iteration = parsed
+		if len(state.CurrentPath) > len(stepPath)+1 {
+			childName := state.CurrentPath[len(stepPath)+1]
+			for i := range step.Repeat.Steps {
+				if step.Repeat.Steps[i].Name == childName {
+					childStartIdx = i
+					break
+				}
+			}
+		}
+	} else if repeatState, ok := state.RepeatStates[repeatKey]; ok {
+		iteration = repeatState.Iteration
+		awaitingCondition = repeatState.AwaitingCondition
+	}
+
+	if state.RepeatStates == nil {
+		state.RepeatStates = make(map[string]RepeatState)
+	}
+	state.RepeatStates[repeatKey] = RepeatState{Iteration: iteration, AwaitingCondition: awaitingCondition}
+	iterationPath := append(slices.Clone(stepPath), strconv.Itoa(iteration))
+
+	if !awaitingCondition {
+		var err error
+		state, err = e.executeSteps(ctx, p, state, ds, step.Repeat.Steps, childStartIdx, iterationPath)
+		if err != nil || state.Status != RunStatusRunning {
+			return state, err
+		}
+		state.RepeatStates[repeatKey] = RepeatState{Iteration: iteration, AwaitingCondition: true}
+	}
+
+	e.recordAttempt(&state, stepPath)
+	done, retryAfter, err := step.Repeat.Until(ctx, ds, iteration)
+	if err != nil {
+		e.recordError(&state, stepPath, err)
+		stepErr := &ErrStepFailed{StepName: step.Name, Path: slices.Clone(stepPath), Err: fmt.Errorf("until: %w", err)}
+		if isDeferred(stepErr) {
+			return e.persistDeferred(ctx, state, ds, stepPath, stepErr, false)
+		}
+		return state, stepErr
+	}
+
+	if done {
+		state.RepeatStates[repeatKey] = RepeatState{Iteration: iteration, Completed: true}
+		state.CurrentPath = slices.Clone(stepPath)
+		state.CompletedSteps = append(state.CompletedSteps, CompletedStep{Path: slices.Clone(stepPath)})
+		e.recordCompleted(&state, stepPath)
+
+		data, marshalErr := ds.marshalData()
+		if marshalErr != nil {
+			return state, marshalErr
+		}
+		state.Data = data
+		if snapshotErr := e.snapshot(ctx, &state, "repeat completion"); snapshotErr != nil {
+			return state, snapshotErr
+		}
+		return state, nil
+	}
+
+	if step.Repeat.MaxIterations > 0 && iteration+1 >= step.Repeat.MaxIterations {
+		limitErr := &ErrRepeatLimit{StepName: step.Name, MaxIterations: step.Repeat.MaxIterations}
+		e.recordError(&state, stepPath, limitErr)
+		return state, &ErrStepFailed{StepName: step.Name, Path: slices.Clone(stepPath), Err: limitErr}
+	}
+
+	nextIteration := iteration + 1
+	state.RepeatStates[repeatKey] = RepeatState{Iteration: nextIteration}
+	state.CurrentPath = append(slices.Clone(stepPath), strconv.Itoa(nextIteration))
+	return e.persistDeferred(ctx, state, ds, stepPath, RetryAfter(retryAfter, nil), false)
 }
 
 // runCompensation walks completed steps in reverse, calling Compensate on each.
@@ -497,13 +673,18 @@ func (e *Executor) runCompensation(
 	for i := state.CompensationIndex; i >= 0; i-- {
 		cs := state.CompletedSteps[i]
 		if !cs.HasCompensator {
+			state.CompensationIndex = i - 1
 			continue
+		}
+		if ctx.Err() != nil {
+			return state, ctx.Err()
 		}
 
 		// Find the step in the pipeline definition.
 		step := findStepByPath(p.Steps, cs.Path)
 		if step == nil || step.Action == nil || step.Action.Compensate == nil {
 			e.Warnf("compensation: step at path %v not found or has no compensator", cs.Path)
+			state.CompensationIndex = i - 1
 			continue
 		}
 
@@ -511,6 +692,13 @@ func (e *Executor) runCompensation(
 
 		if err := step.Action.Compensate(ctx, ds); err != nil {
 			state.CompensationIndex = i
+			e.recordError(&state, cs.Path, err)
+			if ctx.Err() != nil {
+				return state, ctx.Err()
+			}
+			if isDeferred(err) {
+				return e.persistDeferred(ctx, state, ds, cs.Path, err, false)
+			}
 
 			data, marshalErr := ds.marshalData()
 			if marshalErr != nil {
@@ -518,8 +706,8 @@ func (e *Executor) runCompensation(
 			}
 			state.Data = data
 
-			if err := e.snapshot(ctx, state); err != nil {
-				e.Errorf("pipeline %q: snapshot on compensation failure: %v", p.Name, err)
+			if snapshotErr := e.snapshot(ctx, &state, "compensation failure"); snapshotErr != nil {
+				return state, snapshotErr
 			}
 
 			return state, &ErrCompensationFailed{
@@ -537,8 +725,8 @@ func (e *Executor) runCompensation(
 		}
 		state.Data = data
 
-		if err := e.snapshot(ctx, state); err != nil {
-			e.Errorf("pipeline %q: snapshot after compensation step: %v", p.Name, err)
+		if err := e.snapshot(ctx, &state, "compensation step completion"); err != nil {
+			return state, err
 		}
 
 		e.Infof("compensated step %q", step.Name)
@@ -546,7 +734,7 @@ func (e *Executor) runCompensation(
 
 	// All compensation done.
 	state.Status = RunStatusFailed
-	state.CompensationIndex = 0
+	state.CompensationIndex = -1
 
 	data, marshalErr := ds.marshalData()
 	if marshalErr != nil {
@@ -554,8 +742,8 @@ func (e *Executor) runCompensation(
 	}
 	state.Data = data
 
-	if err := e.snapshot(ctx, state); err != nil {
-		e.Errorf("pipeline %q: snapshot after compensation complete: %v", p.Name, err)
+	if err := e.snapshot(ctx, &state, "compensation completion"); err != nil {
+		return state, err
 	}
 
 	e.Infof("pipeline %q: compensation complete, status=failed", p.Name)
@@ -607,6 +795,14 @@ func findStepByPath(steps []Step, path []string) *Step {
 			return findStepByPath(pathSteps, path[2:])
 		}
 
+		// Recurse into a repeat. path[1] is the decimal iteration number.
+		if steps[i].Repeat != nil && len(path) >= 3 {
+			if _, err := strconv.Atoi(path[1]); err != nil {
+				return nil
+			}
+			return findStepByPath(steps[i].Repeat.Steps, path[2:])
+		}
+
 		return nil
 	}
 
@@ -635,6 +831,9 @@ func (e *Executor) runWithRetry(ctx context.Context, step *Step, fn func() error
 		if lastErr == nil {
 			return nil
 		}
+		if isDeferred(lastErr) {
+			return lastErr
+		}
 
 		if attempt+1 < maxAttempts {
 			e.Warnf("step %q attempt %d failed: %v, retrying in %s", step.Name, attempt+1, lastErr, delay)
@@ -654,12 +853,139 @@ func (e *Executor) runWithRetry(ctx context.Context, step *Step, fn func() error
 	return lastErr
 }
 
-// snapshot calls the snapshot function if configured.
-func (e *Executor) snapshot(ctx context.Context, state RunState) error {
-	if e.snapshotFn == nil {
+// snapshot persists a revisioned copy of state. Revision is committed to the
+// returned state only after the callback succeeds.
+func (e *Executor) snapshot(ctx context.Context, state *RunState, operation string) error {
+	if e.snapshotFn == nil && e.casSnapshotFn == nil {
 		return nil
 	}
-	return e.snapshotFn(ctx, state)
+
+	expectedRevision := state.Revision
+	candidate := *state
+	candidate.Revision = expectedRevision + 1
+
+	var err error
+	if e.casSnapshotFn != nil {
+		err = e.casSnapshotFn(ctx, expectedRevision, candidate)
+	} else {
+		err = e.snapshotFn(ctx, candidate)
+	}
+	if err != nil {
+		return &ErrSnapshotFailed{Operation: operation, Err: err}
+	}
+
+	state.Revision = candidate.Revision
+	return nil
+}
+
+// StepPathKey returns the stable key used by RunState.StepDiagnostics and
+// RunState.RepeatStates. It uses JSON Pointer escaping, so names containing '/'
+// or '~' remain unambiguous.
+func StepPathKey(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	escaped := make([]string, len(path))
+	for i, part := range path {
+		part = strings.ReplaceAll(part, "~", "~0")
+		escaped[i] = strings.ReplaceAll(part, "/", "~1")
+	}
+	return "/" + strings.Join(escaped, "/")
+}
+
+func (e *Executor) recordAttempt(state *RunState, path []string) {
+	if state.StepDiagnostics == nil {
+		state.StepDiagnostics = make(map[string]StepDiagnostics)
+	}
+	key := StepPathKey(path)
+	diagnostic := state.StepDiagnostics[key]
+	now := time.Now().UTC()
+	if diagnostic.FirstStartedAt == nil {
+		first := now
+		diagnostic.FirstStartedAt = &first
+	}
+	last := now
+	diagnostic.LastStartedAt = &last
+	diagnostic.NextRunAt = nil
+	diagnostic.Attempts++
+	state.StepDiagnostics[key] = diagnostic
+}
+
+func (e *Executor) recordError(state *RunState, path []string, err error) {
+	if state.StepDiagnostics == nil {
+		state.StepDiagnostics = make(map[string]StepDiagnostics)
+	}
+	key := StepPathKey(path)
+	diagnostic := state.StepDiagnostics[key]
+	if err != nil {
+		diagnostic.LastError = err.Error()
+	}
+	state.StepDiagnostics[key] = diagnostic
+}
+
+func (e *Executor) recordCompleted(state *RunState, path []string) {
+	if state.StepDiagnostics == nil {
+		state.StepDiagnostics = make(map[string]StepDiagnostics)
+	}
+	key := StepPathKey(path)
+	diagnostic := state.StepDiagnostics[key]
+	now := time.Now().UTC()
+	diagnostic.CompletedAt = &now
+	diagnostic.NextRunAt = nil
+	state.StepDiagnostics[key] = diagnostic
+}
+
+func (e *Executor) recordNextRun(state *RunState, path []string, delay time.Duration, cause error) {
+	if state.StepDiagnostics == nil {
+		state.StepDiagnostics = make(map[string]StepDiagnostics)
+	}
+	key := StepPathKey(path)
+	diagnostic := state.StepDiagnostics[key]
+	next := time.Now().UTC().Add(max(delay, 0))
+	diagnostic.NextRunAt = &next
+	if cause != nil {
+		diagnostic.LastError = cause.Error()
+	}
+	state.StepDiagnostics[key] = diagnostic
+}
+
+func (e *Executor) persistDeferred(
+	ctx context.Context,
+	state RunState,
+	ds *dataStore,
+	path []string,
+	err error,
+	polling bool,
+) (RunState, error) {
+	delay, cause, _ := deferredDetails(err)
+	if polling {
+		state.Status = RunStatusPolling
+	}
+	e.recordNextRun(&state, path, delay, cause)
+	data, marshalErr := ds.marshalData()
+	if marshalErr != nil {
+		return state, marshalErr
+	}
+	state.Data = data
+	if snapshotErr := e.snapshot(ctx, &state, "delayed continuation"); snapshotErr != nil {
+		return state, snapshotErr
+	}
+	return state, err
+}
+
+func isDeferred(err error) bool {
+	_, _, ok := deferredDetails(err)
+	return ok
+}
+
+func deferredDetails(err error) (time.Duration, error, bool) {
+	if retryAfter, ok := errors.AsType[*ErrRetryAfter](err); ok {
+		return retryAfter.Duration, retryAfter.Cause, true
+	}
+	if snooze, ok := errors.AsType[ErrSnooze](err); ok {
+		return snooze.Duration, nil, true
+	}
+	return 0, nil, false
 }
 
 // checkVersion verifies the pipeline definition can resume the given state.

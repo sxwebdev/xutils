@@ -28,6 +28,52 @@ func (e ErrSnooze) Error() string {
 	return fmt.Sprintf("pipeline: snooze for %s", e.Duration)
 }
 
+// ErrRetryAfter is a scheduler-neutral delayed-continuation signal. It means
+// the current callback is not complete, compensation must not start, and the
+// pipeline should be resumed after Duration. Cause is retained for diagnostics.
+type ErrRetryAfter struct {
+	Duration time.Duration
+	Cause    error
+}
+
+func (e *ErrRetryAfter) Error() string {
+	if e.Cause == nil {
+		return fmt.Sprintf("pipeline: retry after %s", e.Duration)
+	}
+	return fmt.Sprintf("pipeline: retry after %s: %v", e.Duration, e.Cause)
+}
+
+func (e *ErrRetryAfter) Unwrap() error { return e.Cause }
+
+// RetryAfter returns a scheduler-neutral delayed-continuation signal.
+func RetryAfter(duration time.Duration, cause error) error {
+	return &ErrRetryAfter{Duration: duration, Cause: cause}
+}
+
+// ErrSnapshotFailed reports that updated RunState could not be persisted. The
+// executor stops immediately; callers should reload the last durable state
+// before retrying because the returned state may contain uncommitted progress.
+type ErrSnapshotFailed struct {
+	Operation string
+	Err       error
+}
+
+func (e *ErrSnapshotFailed) Error() string {
+	return fmt.Sprintf("pipeline: snapshot failed during %s: %v", e.Operation, e.Err)
+}
+
+func (e *ErrSnapshotFailed) Unwrap() error { return e.Err }
+
+// ErrRepeatLimit indicates a Repeat reached its configured iteration limit.
+type ErrRepeatLimit struct {
+	StepName      string
+	MaxIterations int
+}
+
+func (e *ErrRepeatLimit) Error() string {
+	return fmt.Sprintf("pipeline: repeat step %q reached maximum of %d iterations", e.StepName, e.MaxIterations)
+}
+
 // ErrCompensationFailed indicates that compensation itself failed.
 type ErrCompensationFailed struct {
 	// Original is the error that triggered compensation.

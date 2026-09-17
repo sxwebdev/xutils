@@ -4,10 +4,12 @@ Declarative pipeline engine with persistence, compensation, and typed steps.
 
 ## Features
 
-- **Persistence** — state saved via callback after each step, survives restarts
+- **Fail-stop persistence** — every state transition is saved before execution continues
 - **Idempotency** — completed steps are never re-executed on resume
 - **Compensation (Saga)** — automatic rollback of completed steps on failure
-- **Typed steps** — Action (one-shot), Poll (repeated check), Branch (conditional)
+- **Typed steps** — Action, Poll, Branch, and resumable Repeat
+- **Scheduler-neutral waits** — callbacks can return `RetryAfter` without blocking a goroutine
+- **Diagnostics** — aggregate attempts, timestamps, errors, and next-run hints per stable step path
 - **Declarative** — entire flow visible in one place
 
 ## Installation
@@ -88,6 +90,28 @@ pipeline.Branch("env_check", decideEnv, map[string][]pipeline.Step{
 })
 ```
 
+### Repeat
+
+Runs a nested sub-pipeline per iteration. The condition runs after the nested
+steps and returns the same `(done, retryAfter, error)` shape as `Poll`:
+
+```go
+pipeline.Repeat("pages", []pipeline.Step{
+    pipeline.Action("fetch", fetchPage,
+        pipeline.WithCompensate(removeFetchedPage)),
+    pipeline.Branch("classify", classifyPage, pagePaths),
+}, func(ctx context.Context, data pipeline.DataAccessor, iteration int) (bool, time.Duration, error) {
+    done, err := noMorePages(ctx, iteration)
+    return done, 5 * time.Second, err
+}, pipeline.WithMaxIterations(1_000))
+```
+
+When `done` is false, the executor snapshots the next iteration and returns
+`*ErrRetryAfter`. It yields even when `retryAfter == 0`, so an unlimited repeat
+cannot spin synchronously. `CurrentPath` includes the iteration number, nested
+branches/repeats resume at the exact child step, and compensation walks actions
+from every iteration in reverse completion order.
+
 ## Persistence & Resume
 
 The executor is **stateless** — all state lives in `RunState` which is passed in and returned.
@@ -99,14 +123,35 @@ state := loadFromDB(jobID) // RunState{} for new jobs
 state, err := executor.Run(ctx, p, state)
 if err == nil {
     // Done. Check state.Status: "completed" or "failed".
+} else if retry, ok := errors.AsType[*pipeline.ErrRetryAfter](err); ok {
+    // State is already snapshotted. Ask any scheduler to resume it later.
+    scheduleRetry(jobID, retry.Duration)
 } else if snooze, ok := errors.AsType[pipeline.ErrSnooze](err); ok {
-    // Poll step waiting. Save state, re-invoke after snooze.Duration.
-    saveState(jobID, state)
+    // Legacy Poll signal; still supported.
     scheduleRetry(jobID, snooze.Duration)
+} else if snapshotErr, ok := errors.AsType[*pipeline.ErrSnapshotFailed](err); ok {
+    // Stop. Reload the last durable state before retrying.
+    log.Printf("snapshot failed during %s: %v", snapshotErr.Operation, snapshotErr)
 } else {
     // Engine error.
 }
 ```
+
+### Snapshot failure contract
+
+Snapshot errors are never logged-and-ignored. `Run` immediately returns the
+updated state and `*ErrSnapshotFailed`, which unwraps the storage error. No next
+step or compensator is invoked. The returned state can contain progress that was
+not persisted; reload the durable state before retrying.
+
+Every non-terminal `Run` checkpoints before invoking a resumed callback. This
+lets a CAS callback reject stale state before an Action or Compensate function
+runs; status changes and callback results are checkpointed again afterward.
+
+An external effect can succeed immediately before its completion snapshot
+fails. Consequently every `Action`, `Compensate`, and side-effecting hook must
+be idempotent. Snapshot storage should be atomic and the callback itself should
+be safe to retry.
 
 ## Compensation
 
@@ -185,6 +230,39 @@ With backoff enabled, the delay doubles between attempts. There is no delay
 after the final attempt, so 5 attempts wait `1s, 2s, 4s, 8s` (four gaps).
 Retries respect context cancellation — a cancel during the wait aborts
 immediately and returns `context.Canceled` without rolling back.
+
+For a delay that must not hold a goroutine, any callback can return:
+
+```go
+return pipeline.RetryAfter(30*time.Second, err)
+```
+
+The executor does not compensate, snapshots the incomplete step, and returns a
+`*ErrRetryAfter` discoverable with `errors.AsType`; its cause remains discoverable
+with `errors.Is`/`errors.AsType`. This is distinct from `WithRetry`, whose bounded
+short retries happen within the current invocation, and from a permanent error,
+which starts compensation. `ErrSnooze` remains supported for existing Poll code.
+
+## Diagnostics
+
+`RunState.StepDiagnostics` is keyed by `StepPathKey(fullPath)` and stores only
+aggregate metadata: attempt count, first/last start, completion, last error, and
+next scheduled run. Repeat iteration numbers are part of child paths. The
+metadata is observational and is never used to make execution decisions.
+
+## Concurrent execution
+
+The executor is stateless and does not provide a process lock or lease. The
+caller must ensure a single active owner for each run. `WithCASSnapshotFn` is an
+optional optimistic-concurrency hook: it receives the expected durable revision
+and a state whose `Revision` is one higher. A CAS conflict becomes
+`*ErrSnapshotFailed` and stops execution.
+
+CAS protects state ordering, but cannot undo an external effect performed before
+a completion CAS loses a race. Use a storage-backed lease/single-consumer policy
+as the primary guard and idempotency keys for external actions. The original
+`WithSnapshotFn` remains available and also advances `RunState.Revision` after
+successful snapshots.
 
 ## Versioning
 
@@ -283,6 +361,7 @@ saveState(state)
 The executor validates the pipeline definition on each `Run`:
 
 - All steps must have unique names within their scope
-- Each step must have exactly one type (Action, Poll, or Branch)
+- Each step must have exactly one type (Action, Poll, Branch, or Repeat)
 - Action/Poll must have non-nil functions
 - Branch must have a Decide function and at least one path
+- Repeat must have an Until function and a non-negative iteration limit

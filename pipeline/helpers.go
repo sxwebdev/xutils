@@ -44,6 +44,21 @@ func Branch(name string, decide BranchFunc, paths map[string][]Step, opts ...Ste
 	return s
 }
 
+// Repeat creates a repeated sub-pipeline. After every completed iteration,
+// until decides whether the repeat is done. A non-completed iteration always
+// yields to the caller (including when retryAfter is zero), so an accidental
+// unbounded repeat cannot monopolize a goroutine.
+func Repeat(name string, steps []Step, until RepeatFunc, opts ...StepOption) Step {
+	s := Step{
+		Name:   name,
+		Repeat: &RepeatStep{Steps: steps, Until: until},
+	}
+	for _, opt := range opts {
+		opt(&s)
+	}
+	return s
+}
+
 // WithCompensate adds a compensating action to an action step.
 // The compensating action is called during rollback if this step completed successfully.
 func WithCompensate(fn ActionFunc) StepOption {
@@ -78,6 +93,15 @@ func WithMaxPollDuration(d time.Duration) StepOption {
 	return func(s *Step) {
 		if s.Poll != nil {
 			s.Poll.MaxDuration = d
+		}
+	}
+}
+
+// WithMaxIterations limits a Repeat to n iterations. Zero means unlimited.
+func WithMaxIterations(n int) StepOption {
+	return func(s *Step) {
+		if s.Repeat != nil {
+			s.Repeat.MaxIterations = n
 		}
 	}
 }

@@ -2,7 +2,9 @@
 
 ## pipeline — Declarative resumable workflow engine
 
-Stateless executor + persistent state. Three step types: Action, Poll, Branch. Built-in saga compensation and versioning.
+Stateless executor + persistent state. Four step types: Action, Poll, Branch,
+Repeat. Built-in saga compensation, diagnostics, fail-stop snapshots, and
+versioning.
 
 ### Defining a pipeline
 
@@ -43,6 +45,14 @@ p := &pipeline.Pipeline{
             },
         }),
 
+        pipeline.Repeat("batches", []pipeline.Step{
+            pipeline.Action("process_batch", processBatch,
+                pipeline.WithCompensate(undoBatch)),
+        }, func(ctx context.Context, data pipeline.DataAccessor, iteration int) (bool, time.Duration, error) {
+            done, err := allBatchesProcessed(ctx, iteration)
+            return done, 5 * time.Second, err
+        }, pipeline.WithMaxIterations(1_000)),
+
         pipeline.Action("notify", notifyFn),
     },
 }
@@ -62,9 +72,15 @@ executor := pipeline.NewExecutor(
 
 // First run
 state, err := executor.Run(ctx, p, pipeline.RunState{})
-if snooze, ok := errors.AsType[pipeline.ErrSnooze](err); ok {
-    // Poll step is waiting — save state and retry after snooze.Duration
+if retryAfter, ok := errors.AsType[*pipeline.ErrRetryAfter](err); ok {
+    // State was snapshotted; ask the external scheduler to resume it later.
+    log.Printf("retry after: %v", retryAfter.Duration)
+} else if snooze, ok := errors.AsType[pipeline.ErrSnooze](err); ok {
+    // Legacy Poll scheduling signal remains supported.
     log.Printf("snoozing for: %v", snooze.Duration)
+} else if snapshotErr, ok := errors.AsType[*pipeline.ErrSnapshotFailed](err); ok {
+    // Stop. Reload the last durable state before retrying.
+    log.Printf("snapshot failed during %s: %v", snapshotErr.Operation, snapshotErr)
 }
 
 // Resume from saved state
@@ -82,17 +98,74 @@ data.Set("order_id", "ord-123")
 orderID, err := pipeline.GetData[string](data, "order_id")
 ```
 
+### Repeat and exact resume
+
+`Repeat` executes its nested steps once per zero-based iteration and calls its
+condition afterward. If the condition returns `done=false`, the executor
+snapshots and yields with `*ErrRetryAfter`. It yields even for duration zero, so
+an unlimited repeat cannot spin synchronously. `CurrentPath` includes repeat
+iteration segments; completed children are not re-run after restart. Nested
+branches and repeats are supported, and compensation walks completed actions
+from every iteration in reverse order.
+
+Use `WithMaxIterations` when a business limit exists. The default zero is
+unlimited but still scheduler-yielding.
+
+### Scheduler-neutral delayed continuation
+
+Any callback, including Action, OnEnter, Poll, Branch decision, Repeat
+condition, or Compensate, may return:
+
+```go
+return pipeline.RetryAfter(30*time.Second, cause)
+```
+
+This does not start compensation and does not sleep in the executor. Match the
+signal with `errors.AsType` and the cause with `errors.Is`/`errors.AsType`. Keep
+`WithRetry` for bounded retries inside one invocation; use `RetryAfter` when the
+external scheduler should own the delay. `ErrSnooze` remains compatible for
+existing Poll callbacks, and `NoCompensate` remains compatible for caller-owned
+retry policies.
+
+### Snapshot contract
+
+Every non-terminal `Run` checkpoints before invoking a resumed callback. Every
+status transition, completed step, delayed continuation, terminal step error,
+and compensation stage is also snapshotted before execution proceeds. A
+snapshot callback error returns `*ErrSnapshotFailed` and stops immediately; do
+not run the next step or compensator. Reload the last durable state rather than
+reusing the possibly uncommitted returned state.
+
+Actions, compensators, and side-effecting hooks must remain idempotent because
+an external effect may finish immediately before its completion snapshot fails.
+
+### Diagnostics and concurrency
+
+`RunState.StepDiagnostics` contains aggregate attempt/timestamp/error/next-run
+metadata keyed by `pipeline.StepPathKey(fullPath)`. It is diagnostic only and
+must not drive workflow decisions. `RepeatStates` and `CurrentPath` drive repeat
+resume; new fields are optional and old JSON remains readable.
+
+`RunState.Revision` advances after successful configured snapshot callbacks.
+`WithCASSnapshotFn` enables an atomic expected-revision check, while
+`WithSnapshotFn` remains compatible. CAS detects stale state but is not a lease:
+applications still need single-owner execution (for example a storage lease or
+single-consumer queue) and idempotency keys for external effects.
+
 ### Error handling
 
 ```go
 // Stop compensation (saga rollback) for this error:
 return pipeline.NoCompensate(err)
 
-// Error types (match with errors.As / errors.AsType, not errors.Is):
+// Error types (match with errors.AsType, not errors.Is):
+// pipeline.ErrRetryAfter        — scheduler-neutral delayed continuation
 // pipeline.ErrSnooze             — poll step is waiting (carries Duration)
+// pipeline.ErrSnapshotFailed     — persistence failed; execution stopped
 // pipeline.ErrStepFailed         — step execution failed
 // pipeline.ErrCompensationFailed — compensation action failed
 // pipeline.ErrPollTimeout        — poll exceeded MaxDuration
+// pipeline.ErrRepeatLimit        — repeat exceeded WithMaxIterations
 // pipeline.ErrVersionMismatch    — state version incompatible with pipeline
 //
 // Sentinel (match with errors.Is):

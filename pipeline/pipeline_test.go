@@ -465,13 +465,13 @@ func TestOnEnterHook(t *testing.T) {
 }
 
 func TestRetry(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 
 	p := &Pipeline{
 		Name: "retry_test",
 		Steps: []Step{
 			Action("flaky", func(_ context.Context, _ DataAccessor) error {
-				n := atomic.AddInt32(&attempts, 1)
+				n := attempts.Add(1)
 				if n < 3 {
 					return fmt.Errorf("attempt %d failed", n)
 				}
@@ -484,7 +484,7 @@ func TestRetry(t *testing.T) {
 	state, err := executor.Run(t.Context(), p, RunState{})
 	require.NoError(t, err)
 	assert.Equal(t, RunStatusCompleted, state.Status)
-	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts))
+	assert.Equal(t, int32(3), attempts.Load())
 }
 
 func TestRetryExhausted(t *testing.T) {
@@ -661,7 +661,7 @@ func TestValidation_NoStepType(t *testing.T) {
 	executor := newTestExecutor(t, nil)
 	_, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "exactly one of Action, Poll, or Branch")
+	assert.Contains(t, err.Error(), "exactly one of Action, Poll, Branch, or Repeat")
 }
 
 func TestGetDataGeneric(t *testing.T) {
@@ -876,11 +876,11 @@ func TestVersionMismatchRejectsOldState(t *testing.T) {
 	}
 
 	executor := newTestExecutor(t, nil)
-	state, err := executor.Run(t.Context(), p, state)
+	_, err := executor.Run(t.Context(), p, state)
 	require.Error(t, err)
 
-	var vErr *ErrVersionMismatch
-	require.ErrorAs(t, err, &vErr)
+	vErr, ok := errors.AsType[*ErrVersionMismatch](err)
+	require.True(t, ok)
 	assert.Equal(t, 1, vErr.StateVersion)
 	assert.Equal(t, 2, vErr.PipelineVersion)
 	assert.Equal(t, 2, vErr.MinResumeVersion)
@@ -904,8 +904,8 @@ func TestVersionMismatchRejectsNewerState(t *testing.T) {
 	_, err := executor.Run(t.Context(), p, state)
 	require.Error(t, err)
 
-	var vErr *ErrVersionMismatch
-	require.ErrorAs(t, err, &vErr)
+	vErr, ok := errors.AsType[*ErrVersionMismatch](err)
+	require.True(t, ok)
 	assert.Equal(t, 2, vErr.StateVersion)
 	assert.Equal(t, 1, vErr.PipelineVersion)
 }
@@ -1014,8 +1014,8 @@ func TestVersionMismatchCompensatingState(t *testing.T) {
 	_, err := executor.Run(t.Context(), p, state)
 	require.Error(t, err)
 
-	var vErr *ErrVersionMismatch
-	require.ErrorAs(t, err, &vErr)
+	_, ok := errors.AsType[*ErrVersionMismatch](err)
+	require.True(t, ok)
 }
 
 func TestVersionValidation(t *testing.T) {
@@ -1069,8 +1069,8 @@ func TestVersionPollingResumeWithSameVersion(t *testing.T) {
 	// First run — gets snooze.
 	state, err := executor.Run(t.Context(), p, RunState{})
 	require.Error(t, err)
-	var snooze ErrSnooze
-	require.ErrorAs(t, err, &snooze)
+	_, ok := errors.AsType[ErrSnooze](err)
+	require.True(t, ok)
 	assert.Equal(t, 2, state.Version)
 
 	// Resume with same version — should complete.

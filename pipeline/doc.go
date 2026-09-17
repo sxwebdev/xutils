@@ -5,11 +5,12 @@
 //
 // # Core Concepts
 //
-// A [Pipeline] is a named sequence of steps. Each step is exactly one of three types:
+// A [Pipeline] is a named sequence of steps. Each step is exactly one of four types:
 //
 //   - [Action] — executes once, optionally defines a compensating (rollback) action
 //   - [Poll] — checks a condition repeatedly, pausing between attempts via [ErrSnooze]
 //   - [Branch] — evaluates a condition and picks one of several sub-pipelines to execute
+//   - [Repeat] — repeats a resumable sub-pipeline and yields between iterations
 //
 // The [Executor] runs a pipeline given a [RunState]. The executor is stateless — all
 // mutable state lives in RunState, which can be serialized to JSON and stored in a database.
@@ -74,6 +75,16 @@
 //		},
 //	})
 //
+// Repeat steps execute a nested pipeline per iteration. They can contain Branch
+// and Repeat steps. An unfinished repeat is snapshotted and yields even when its
+// requested delay is zero, preventing synchronous runaway loops:
+//
+//	pipeline.Repeat("pages", []pipeline.Step{
+//		pipeline.Action("fetch", fetchPage),
+//	}, func(ctx context.Context, data pipeline.DataAccessor, iteration int) (bool, time.Duration, error) {
+//		return iteration == 9, time.Second, nil
+//	}, pipeline.WithMaxIterations(100))
+//
 // # Data Passing
 //
 // Steps communicate through a [DataAccessor], available as the second argument
@@ -107,8 +118,11 @@
 //		}),
 //	)
 //
-// The snapshot function is called after each completed step, on status changes,
-// and before returning [ErrSnooze]. To resume a pipeline after a restart:
+// Every non-terminal Run snapshots before invoking a resumed callback. The
+// snapshot function is also called after each completed step, on status changes,
+// and before returning a delayed-continuation signal. Snapshot failures stop the
+// executor immediately and are returned as [ErrSnapshotFailed]; the next step or
+// compensator is never invoked. To resume a pipeline after a restart:
 //
 //	var state pipeline.RunState
 //	data, _ := db.Load(ctx, pipelineID)
@@ -117,7 +131,11 @@
 //	state, err := executor.Run(ctx, p, state)
 //
 // Already-completed steps are skipped automatically. The pipeline resumes from the
-// exact position it was at, including inside nested branches.
+// exact position it was at, including inside nested branches and repeats.
+//
+// External actions and compensators must be idempotent. Their effect may finish
+// before the completion snapshot fails, so resuming the last durable state can
+// invoke the callback again.
 //
 // # Compensation (Saga Pattern)
 //
@@ -198,7 +216,9 @@
 //
 // # Error Types
 //
+//   - [ErrRetryAfter] — scheduler-neutral delayed continuation from any callback
 //   - [ErrSnooze] — poll step is waiting; contains Duration hint for retry
+//   - [ErrSnapshotFailed] — persistence failed; execution stopped immediately
 //   - [ErrStepFailed] — step execution failed; contains StepName, Path, and underlying Err
 //   - [ErrPollTimeout] — poll step exceeded its [WithMaxPollDuration] limit
 //   - [ErrCompensationFailed] — compensation failed; contains Original and Compensation errors
@@ -216,18 +236,33 @@
 // With backoff enabled, delays double on each attempt (1s, 2s, 4s, ...).
 // Retries respect context cancellation.
 //
+// For a delayed retry that must not block the executor, return [RetryAfter] from
+// any callback. The state is persisted before [ErrRetryAfter] reaches the caller;
+// its cause is available through errors.Is/errors.AsType. [ErrSnooze] remains
+// supported for Poll compatibility.
+//
 // # Step Options
 //
 //   - [WithCompensate] — attach a rollback function to an action step
 //   - [WithOnEnter] — pre-execution hook (logging, webhooks, metrics)
 //   - [WithRetry] — automatic retry with configurable attempts, delay, and backoff
 //   - [WithMaxPollDuration] — maximum total time a poll step can run before timing out
+//   - [WithMaxIterations] — optional safety limit for a Repeat step
 //
 // # Executor Options
 //
 //   - [WithLogger] — set a structured logger (implements loggerutil.Logger)
 //   - [WithDebug] — enable verbose debug logging
 //   - [WithSnapshotFn] — register a persistence callback for state snapshots
+//   - [WithCASSnapshotFn] — register a revision-aware compare-and-swap callback
+//
+// # Concurrency
+//
+// Executor does not lock a RunState. Callers must arrange a single active owner,
+// normally with a storage-backed lease or single-consumer queue. [WithCASSnapshotFn]
+// adds optimistic revision checks, but CAS alone cannot prevent duplicate external
+// effects when two workers start the same callback concurrently. Keep actions and
+// compensators idempotent.
 //
 // # Execution Lifecycle
 //
@@ -236,7 +271,7 @@
 //  1. Create a [Pipeline] definition (immutable, reusable)
 //  2. Create an [Executor] with desired options
 //  3. Call [Executor.Run] with an empty [RunState] for new execution
-//  4. If [ErrSnooze] is returned, persist state and schedule a retry
+//  4. If [ErrRetryAfter] or [ErrSnooze] is returned, schedule a retry
 //  5. On retry, load state and call [Executor.Run] again
 //  6. Repeat until [RunState.Status] is [RunStatusCompleted] or [RunStatusFailed]
 //

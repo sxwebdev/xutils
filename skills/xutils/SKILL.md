@@ -29,3 +29,5 @@ Go utility packages for concurrency, orchestration, resilience, and data handlin
 - `loggerutil.Logger` interface is used across broker, retry, loopper, pipeline, workflow
 - Zero external runtime dependencies (only `testify` for tests)
 - Pipeline and workflow engines support snapshot persistence for resumability
+- `pipeline` snapshots are fail-stop: never continue after `ErrSnapshotFailed`
+- `pipeline.Repeat` and `pipeline.RetryAfter` are scheduler-neutral; do not add sleeps or scheduler/storage dependencies to the engine

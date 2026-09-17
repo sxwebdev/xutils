@@ -23,7 +23,7 @@ type Pipeline struct {
 	MinResumeVersion *int
 }
 
-// Step is a sealed sum type: exactly one of Action, Poll, or Branch must be set.
+// Step is a sealed sum type: exactly one of Action, Poll, Branch, or Repeat must be set.
 type Step struct {
 	// Name is a unique identifier for the step within its scope.
 	Name string
@@ -33,6 +33,8 @@ type Step struct {
 	Poll *PollStep
 	// Branch is set for conditional branching steps.
 	Branch *BranchStep
+	// Repeat is set for repeated sub-pipelines.
+	Repeat *RepeatStep
 	// OnEnter is called before the step executes (e.g., fire a webhook).
 	OnEnter func(ctx context.Context, data DataAccessor) error
 	// Retry configures retry behavior for action steps.
@@ -66,6 +68,20 @@ type BranchStep struct {
 	Paths map[string][]Step
 }
 
+// RepeatStep executes Steps once per iteration and then calls Until. When Until
+// returns done=false, execution is yielded to the caller before the next
+// iteration. A zero retryAfter requests an immediate, but still asynchronous,
+// continuation; the executor never spins synchronously between iterations.
+type RepeatStep struct {
+	// Steps is the sub-pipeline executed for every iteration.
+	Steps []Step
+	// Until decides whether the repeat is complete after an iteration. iteration
+	// is zero-based. When done is false, retryAfter is returned to the scheduler.
+	Until RepeatFunc
+	// MaxIterations is an optional safety limit. Zero means unlimited.
+	MaxIterations int
+}
+
 // ActionFunc is the signature for action step functions.
 type ActionFunc func(ctx context.Context, data DataAccessor) error
 
@@ -76,6 +92,11 @@ type PollFunc func(ctx context.Context, data DataAccessor) (done bool, retryAfte
 // BranchFunc is the signature for branch decision functions.
 // Returns the name of the chosen path.
 type BranchFunc func(ctx context.Context, data DataAccessor) (path string, err error)
+
+// RepeatFunc is called after each completed iteration. Returning done=false
+// yields execution and requests another iteration after retryAfter. A zero
+// duration means the caller may schedule the continuation immediately.
+type RepeatFunc func(ctx context.Context, data DataAccessor, iteration int) (done bool, retryAfter time.Duration, err error)
 
 // RetryConfig configures retry behavior for action steps.
 type RetryConfig struct {
@@ -231,8 +252,11 @@ func validateSteps(steps []Step, parentPath []string) error {
 		if step.Branch != nil {
 			typeCount++
 		}
+		if step.Repeat != nil {
+			typeCount++
+		}
 		if typeCount != 1 {
-			return fmt.Errorf("pipeline: step %q must have exactly one of Action, Poll, or Branch (got %d)", step.Name, typeCount)
+			return fmt.Errorf("pipeline: step %q must have exactly one of Action, Poll, Branch, or Repeat (got %d)", step.Name, typeCount)
 		}
 
 		// Validate action.
@@ -258,6 +282,20 @@ func validateSteps(steps []Step, parentPath []string) error {
 				if err := validateSteps(pathSteps, childPath); err != nil {
 					return err
 				}
+			}
+		}
+
+		// Validate repeat.
+		if step.Repeat != nil {
+			if step.Repeat.Until == nil {
+				return fmt.Errorf("pipeline: repeat step %q has nil Until function", step.Name)
+			}
+			if step.Repeat.MaxIterations < 0 {
+				return fmt.Errorf("pipeline: repeat step %q max iterations must be >= 0", step.Name)
+			}
+			childPath := append(append([]string{}, parentPath...), step.Name, "<iteration>")
+			if err := validateSteps(step.Repeat.Steps, childPath); err != nil {
+				return err
 			}
 		}
 	}

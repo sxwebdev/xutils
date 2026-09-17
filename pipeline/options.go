@@ -6,10 +6,16 @@ import (
 	"github.com/sxwebdev/xutils/loggerutil"
 )
 
-// SnapshotFunc is called to persist the pipeline state.
-// It is invoked after each completed step and on status changes.
-// The implementation should be idempotent and atomic.
+// SnapshotFunc is called to persist pipeline state before resumed callbacks and
+// after completed steps, status changes, delayed continuations, and failures.
+// The implementation should be idempotent, atomic, and synchronous: returning
+// nil declares the supplied state durable.
 type SnapshotFunc func(ctx context.Context, state RunState) error
+
+// CASSnapshotFunc persists state only if expectedRevision still matches the
+// durable revision. state.Revision is expectedRevision+1. A conflict must be
+// returned as an error; the executor wraps it in ErrSnapshotFailed.
+type CASSnapshotFunc func(ctx context.Context, expectedRevision uint64, state RunState) error
 
 // ExecutorOption configures an Executor.
 type ExecutorOption func(*Executor)
@@ -28,10 +34,19 @@ func WithDebug(debug bool) ExecutorOption {
 	}
 }
 
-// WithSnapshotFn sets the persistence callback.
-// This function is called after each completed step and on status changes.
+// WithSnapshotFn sets the fail-stop persistence callback.
 func WithSnapshotFn(fn SnapshotFunc) ExecutorOption {
 	return func(e *Executor) {
 		e.snapshotFn = fn
+		e.casSnapshotFn = nil
+	}
+}
+
+// WithCASSnapshotFn sets an optimistic-concurrency-aware persistence callback.
+// It replaces any SnapshotFunc configured earlier.
+func WithCASSnapshotFn(fn CASSnapshotFunc) ExecutorOption {
+	return func(e *Executor) {
+		e.casSnapshotFn = fn
+		e.snapshotFn = nil
 	}
 }

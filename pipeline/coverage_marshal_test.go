@@ -162,9 +162,15 @@ func TestMarshalError_CompensationStepSuccess(t *testing.T) {
 // --- snapshot errors on poll and compensation-failure paths ---
 
 func TestSnapshotError_PollSnooze(t *testing.T) {
+	snapshotCause := errors.New("snap fail")
 	exec := NewExecutor(
 		WithLogger(&testLogger{t: t}),
-		WithSnapshotFn(func(_ context.Context, _ RunState) error { return errors.New("snap fail") }),
+		WithSnapshotFn(func(_ context.Context, state RunState) error {
+			if state.Status == RunStatusPolling {
+				return snapshotCause
+			}
+			return nil
+		}),
 	)
 	p := &Pipeline{Name: "s_snooze", Steps: []Step{
 		Poll("p", func(_ context.Context, _ DataAccessor) (bool, time.Duration, error) {
@@ -172,14 +178,24 @@ func TestSnapshotError_PollSnooze(t *testing.T) {
 		}),
 	}}
 	_, err := exec.Run(t.Context(), p, RunState{})
+	_, ok := errors.AsType[*ErrSnapshotFailed](err)
+	require.True(t, ok)
+	require.ErrorIs(t, err, snapshotCause)
 	_, isSnooze := errors.AsType[ErrSnooze](err)
-	require.True(t, isSnooze, "snapshot error is logged, snooze still returned")
+	require.False(t, isSnooze, "snapshot failure takes precedence over the scheduling signal")
 }
 
 func TestSnapshotError_PollComplete(t *testing.T) {
+	var calls int
 	exec := NewExecutor(
 		WithLogger(&testLogger{t: t}),
-		WithSnapshotFn(func(_ context.Context, _ RunState) error { return errors.New("snap fail") }),
+		WithSnapshotFn(func(_ context.Context, _ RunState) error {
+			calls++
+			if calls == 2 { // poll completion
+				return errors.New("snap fail")
+			}
+			return nil
+		}),
 	)
 	p := &Pipeline{Name: "s_complete", Steps: []Step{
 		Poll("p", func(_ context.Context, _ DataAccessor) (bool, time.Duration, error) {
@@ -187,14 +203,23 @@ func TestSnapshotError_PollComplete(t *testing.T) {
 		}),
 	}}
 	state, err := exec.Run(t.Context(), p, RunState{})
-	require.NoError(t, err)
-	assert.Equal(t, RunStatusCompleted, state.Status)
+	_, ok := errors.AsType[*ErrSnapshotFailed](err)
+	require.True(t, ok)
+	assert.Equal(t, RunStatusRunning, state.Status)
 }
 
 func TestSnapshotError_CompensationStepFailure(t *testing.T) {
+	var snapshots int
 	exec := NewExecutor(
 		WithLogger(&testLogger{t: t}),
-		WithSnapshotFn(func(_ context.Context, _ RunState) error { return errors.New("snap fail") }),
+		WithSnapshotFn(func(_ context.Context, state RunState) error {
+			snapshots++
+			// Fail the snapshot taken after the compensator reports its error.
+			if state.Status == RunStatusCompensating && snapshots >= 4 {
+				return errors.New("snap fail")
+			}
+			return nil
+		}),
 	)
 	p := &Pipeline{Name: "s_comp_fail", Steps: []Step{
 		Action("a", okAction, WithCompensate(func(_ context.Context, _ DataAccessor) error {
@@ -203,8 +228,8 @@ func TestSnapshotError_CompensationStepFailure(t *testing.T) {
 		Action("b", func(_ context.Context, _ DataAccessor) error { return errors.New("boom") }),
 	}}
 	state, err := exec.Run(t.Context(), p, RunState{})
-	var cf *ErrCompensationFailed
-	require.True(t, errors.As(err, &cf))
+	_, ok := errors.AsType[*ErrSnapshotFailed](err)
+	require.True(t, ok)
 	assert.Equal(t, RunStatusCompensating, state.Status)
 }
 
@@ -239,9 +264,16 @@ func TestRunCompensation_FinalMarshalError(t *testing.T) {
 // --- snapshot error on the NoCompensate path ---
 
 func TestSnapshotError_NoCompensate(t *testing.T) {
+	var calls int
 	exec := NewExecutor(
 		WithLogger(&testLogger{t: t}),
-		WithSnapshotFn(func(_ context.Context, _ RunState) error { return errors.New("snap fail") }),
+		WithSnapshotFn(func(_ context.Context, _ RunState) error {
+			calls++
+			if calls == 2 {
+				return errors.New("snap fail")
+			}
+			return nil
+		}),
 	)
 	p := &Pipeline{Name: "s_nocomp", Steps: []Step{
 		Action("a", func(_ context.Context, _ DataAccessor) error {
@@ -249,7 +281,9 @@ func TestSnapshotError_NoCompensate(t *testing.T) {
 		}),
 	}}
 	_, err := exec.Run(t.Context(), p, RunState{})
-	require.ErrorIs(t, err, ErrNoCompensate, "NoCompensate propagates despite snapshot error")
+	_, ok := errors.AsType[*ErrSnapshotFailed](err)
+	require.True(t, ok)
+	require.NotErrorIs(t, err, ErrNoCompensate, "snapshot failure takes precedence")
 }
 
 // --- findStepByPath: malformed completed paths during compensation ---

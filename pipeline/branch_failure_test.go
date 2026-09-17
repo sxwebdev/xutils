@@ -19,7 +19,8 @@ func TestBranchChildFailureStopsParentScope(t *testing.T) {
 		Name: "nested-branch",
 		Steps: []pipeline.Step{
 			pipeline.Action("a", func(ctx context.Context, d pipeline.DataAccessor) error { return nil }),
-			pipeline.Branch("b",
+			pipeline.Branch(
+				"b",
 				func(ctx context.Context, d pipeline.DataAccessor) (string, error) { return "go", nil },
 				map[string][]pipeline.Step{
 					"go": {
@@ -67,14 +68,16 @@ func TestBranchCompensationFailureNoDoubleCompensate(t *testing.T) {
 	p := &pipeline.Pipeline{
 		Name: "nested-branch-comp-fail",
 		Steps: []pipeline.Step{
-			pipeline.Action("a",
+			pipeline.Action(
+				"a",
 				func(ctx context.Context, d pipeline.DataAccessor) error { return nil },
 				pipeline.WithCompensate(func(ctx context.Context, d pipeline.DataAccessor) error {
 					compA++
 					return compErr
 				}),
 			),
-			pipeline.Branch("b",
+			pipeline.Branch(
+				"b",
 				func(ctx context.Context, d pipeline.DataAccessor) (string, error) { return "go", nil },
 				map[string][]pipeline.Step{
 					"go": {
@@ -90,8 +93,7 @@ func TestBranchCompensationFailureNoDoubleCompensate(t *testing.T) {
 	ex := pipeline.NewExecutor()
 	st, err := ex.Run(t.Context(), p, pipeline.RunState{})
 
-	var compFailed *pipeline.ErrCompensationFailed
-	if !errors.As(err, &compFailed) {
+	if _, ok := errors.AsType[*pipeline.ErrCompensationFailed](err); !ok {
 		t.Fatalf("expected *ErrCompensationFailed, got %T: %v", err, err)
 	}
 	if !errors.Is(err, compErr) {
@@ -116,7 +118,8 @@ func TestNestedNoCompensateKeepsRealFailedPath(t *testing.T) {
 	p := &pipeline.Pipeline{
 		Name: "nested-nocompensate",
 		Steps: []pipeline.Step{
-			pipeline.Branch("b",
+			pipeline.Branch(
+				"b",
 				func(ctx context.Context, d pipeline.DataAccessor) (string, error) { return "go", nil },
 				map[string][]pipeline.Step{
 					"go": {
