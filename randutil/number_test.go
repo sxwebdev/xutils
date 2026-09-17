@@ -2,7 +2,6 @@ package randutil_test
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"testing"
 
@@ -70,9 +69,8 @@ func TestGenerateRandomNumber_Length1CoversDomain(t *testing.T) {
 
 // Regression: length 19 used to overflow int64 (10^19-1 does not fit),
 // occasionally yielding negative / out-of-range values. The upper bound is
-// clamped to math.MaxInt64. Assert BOTH bounds: value is a valid 19-digit
-// number >= 10^18 and never exceeds MaxInt64 (it cannot, by type, but we also
-// confirm it never goes negative, which is the actual historical symptom).
+// clamped to math.MaxInt64. Assert that every result is a positive 19-digit
+// number >= 10^18; the int64 return type enforces the upper bound.
 func TestGenerateRandomNumber_Length19(t *testing.T) {
 	const lo = int64(1_000_000_000_000_000_000) // 10^18
 	for range 5000 {
@@ -82,9 +80,6 @@ func TestGenerateRandomNumber_Length19(t *testing.T) {
 		}
 		if n < lo {
 			t.Fatalf("value below 10^18 (negative or too small): %d", n)
-		}
-		if n > math.MaxInt64 {
-			t.Fatalf("value above MaxInt64: %d", n) // unreachable by int64 type, asserts intent
 		}
 		if s := strconv.FormatInt(n, 10); len(s) != 19 {
 			t.Fatalf("expected 19 digits, got %d (%s)", len(s), s)
