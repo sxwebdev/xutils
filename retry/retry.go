@@ -43,8 +43,8 @@ func New(opts ...Option) *Retry {
 // Do - performs the retry mechanism.
 //
 // On exhaustion of all attempts (PolicyLinear, PolicyBackoff) Do returns an
-// *Error wrapping the last error returned by fn; use errors.Is / errors.As /
-// errors.AsType to inspect the cause. If fn returns an error wrapping ErrExit,
+// *Error wrapping the last error returned by fn; use errors.Is / errors.AsType
+// to inspect the cause. If fn returns an error wrapping ErrExit,
 // that error is returned as-is. When a context is configured (WithContext) and
 // it is cancelled while waiting between attempts, the context error is returned.
 func (r *Retry) Do(fn func() error) error {

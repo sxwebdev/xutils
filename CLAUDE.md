@@ -40,8 +40,8 @@ Write tests that verify **behavior**, not the implementation. Concretely:
   or deadline contexts from it (`context.WithCancel(t.Context())`,
   `context.WithTimeout(t.Context(), …)`) — never `context.Background()`. It is
   auto-cancelled at test end, preventing leaks.
-- **Verify errors by identity, not text.** Use `errors.Is` / `errors.As` /
-  `errors.AsType` to match wrapped causes and custom error types. Check the
+- **Verify errors by identity, not text.** Use `errors.Is` / `errors.AsType`
+  to match wrapped causes and custom error types. Check the
   exact message string at most once, only where the format is part of the
   contract.
 - **Run with `-race`** for anything that spawns goroutines or touches shared

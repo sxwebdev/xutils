@@ -23,11 +23,10 @@ var (
 // Error describes a failed retry run. It carries the retry policy, the number
 // of attempts performed and the last error returned by the retried function.
 //
-// The original error is available via errors.Is / errors.As / errors.Unwrap.
+// The original error is available via errors.Is / errors.AsType / errors.Unwrap.
 //
-// To extract the *Error itself (e.g. to read Policy / Attempts) prefer the
-// generic errors.AsType helper (Go 1.20+ as errors.As, Go 1.26+ as
-// errors.AsType):
+// To extract the *Error itself (e.g. to read Policy / Attempts), use the
+// generic errors.AsType helper:
 //
 //	if rerr, ok := errors.AsType[*retry.Error](err); ok {
 //		log.Printf("policy=%s attempts=%d cause=%v", rerr.Policy, rerr.Attempts, rerr.Err)
@@ -44,5 +43,5 @@ func (e *Error) Error() string {
 }
 
 // Unwrap returns the original error so it can be inspected with
-// errors.Is / errors.As.
+// errors.Is / errors.AsType.
 func (e *Error) Unwrap() error { return e.Err }
