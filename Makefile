@@ -1,3 +1,7 @@
+fmt:
+	go fix ./...
+	gofumpt -l -w .
+
 lint:
 	golangci-lint run
 
