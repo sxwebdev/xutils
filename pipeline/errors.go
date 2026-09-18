@@ -47,7 +47,7 @@ func (e *ErrRetryAfter) Unwrap() error { return e.Cause }
 
 // RetryAfter returns a scheduler-neutral delayed-continuation signal.
 func RetryAfter(duration time.Duration, cause error) error {
-	return &ErrRetryAfter{Duration: duration, Cause: cause}
+	return &ErrRetryAfter{Duration: normalizeDuration(duration), Cause: cause}
 }
 
 // ErrSnapshotFailed reports that updated RunState could not be persisted. The
@@ -69,6 +69,51 @@ type ErrRepeatLimit struct {
 	StepName      string
 	MaxIterations int
 }
+
+// ErrRepeatTimeout indicates a Repeat reached its configured wall-clock limit.
+type ErrRepeatTimeout struct {
+	StepName    string
+	MaxDuration time.Duration
+}
+
+func (e *ErrRepeatTimeout) Error() string {
+	return fmt.Sprintf("pipeline: repeat step %q exceeded max duration %s", e.StepName, e.MaxDuration)
+}
+
+// ErrCompactRepeatCompensation reports a definition that could discard a
+// compensation journal while compacting Repeat history.
+type ErrCompactRepeatCompensation struct {
+	StepName        string
+	CompensatorPath []string
+}
+
+func (e *ErrCompactRepeatCompensation) Error() string {
+	return fmt.Sprintf(
+		"pipeline: compact repeat step %q contains compensating action at path %s; place an aggregating compensator before the repeat or use full history",
+		e.StepName,
+		strings.Join(e.CompensatorPath, "/"),
+	)
+}
+
+// ErrStateMigrationFailed reports an unsuccessful version migration.
+type ErrStateMigrationFailed struct {
+	PipelineName string
+	FromVersion  int
+	ToVersion    int
+	Err          error
+}
+
+func (e *ErrStateMigrationFailed) Error() string {
+	return fmt.Sprintf(
+		"pipeline %q: state migration from version %d to %d failed: %v",
+		e.PipelineName,
+		e.FromVersion,
+		e.ToVersion,
+		e.Err,
+	)
+}
+
+func (e *ErrStateMigrationFailed) Unwrap() error { return e.Err }
 
 func (e *ErrRepeatLimit) Error() string {
 	return fmt.Sprintf("pipeline: repeat step %q reached maximum of %d iterations", e.StepName, e.MaxIterations)

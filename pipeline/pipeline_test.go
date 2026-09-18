@@ -553,6 +553,7 @@ func TestNestedBranchWithCompensation(t *testing.T) {
 }
 
 func TestPollMaxDuration(t *testing.T) {
+	clock := newManualClock()
 	p := &Pipeline{
 		Name: "poll_timeout_test",
 		Steps: []Step{
@@ -562,12 +563,11 @@ func TestPollMaxDuration(t *testing.T) {
 		},
 	}
 
-	executor := newTestExecutor(t, nil)
+	executor := NewExecutor(WithClock(clock))
 
 	// Simulate multiple poll invocations with time passing.
 	state := RunState{}
-	start := time.Now()
-	pastStart := start.Add(-100 * time.Millisecond)
+	pastStart := clock.Now().Add(-100 * time.Millisecond)
 	state.PollStartedAt = &pastStart
 	state.CurrentPath = []string{"forever_poll"}
 	state.Status = RunStatusPolling

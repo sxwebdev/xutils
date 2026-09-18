@@ -232,7 +232,7 @@ func TestRunStateOldJSONRemainsCompatible(t *testing.T) {
 	if err := json.Unmarshal(old, &state); err != nil {
 		t.Fatalf("unmarshal old state: %v", err)
 	}
-	if state.Revision != 0 || state.StepDiagnostics != nil || state.RepeatStates != nil {
+	if state.Revision != 0 || state.StepDiagnostics != nil || state.RepeatStates != nil || state.RepeatTimeout != nil {
 		t.Fatalf("new optional fields are not zero-valued: %+v", state)
 	}
 

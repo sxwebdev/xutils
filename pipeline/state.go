@@ -76,6 +76,10 @@ type RunState struct {
 	// RepeatStates records the current zero-based iteration for active and
 	// completed Repeat steps, keyed by the Repeat step's full path.
 	RepeatStates map[string]RepeatState `json:"repeat_states,omitempty"`
+
+	// RepeatTimeout preserves a typed Repeat timeout across compensation and
+	// process restarts. It is absent for all other failures.
+	RepeatTimeout *RepeatTimeoutState `json:"repeat_timeout,omitempty"`
 }
 
 // StepDiagnostics is aggregate diagnostic metadata for a step. It is
@@ -97,6 +101,14 @@ type RepeatState struct {
 	AwaitingCondition bool `json:"awaiting_condition,omitempty"`
 	// Completed indicates the Repeat itself completed.
 	Completed bool `json:"completed,omitempty"`
+	// StartedAt is the start of the Repeat's total duration window.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+}
+
+// RepeatTimeoutState is the persisted payload for ErrRepeatTimeout.
+type RepeatTimeoutState struct {
+	StepName    string        `json:"step_name"`
+	MaxDuration time.Duration `json:"max_duration"`
 }
 
 // CompletedStep records a step that finished successfully.

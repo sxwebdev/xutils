@@ -105,3 +105,24 @@ func WithMaxIterations(n int) StepOption {
 		}
 	}
 }
+
+// WithMaxRepeatDuration sets the maximum total duration of a Repeat across
+// delayed continuations and process restarts. Zero means unlimited.
+func WithMaxRepeatDuration(d time.Duration) StepOption {
+	return func(s *Step) {
+		if s.Repeat != nil {
+			s.Repeat.MaxDuration = d
+		}
+	}
+}
+
+// WithRepeatHistory selects how completed Repeat iteration history is stored.
+// Compact history is incompatible with compensators nested anywhere below the
+// Repeat and should be enabled only together with a new pipeline version.
+func WithRepeatHistory(history RepeatHistory) StepOption {
+	return func(s *Step) {
+		if s.Repeat != nil {
+			s.Repeat.History = history
+		}
+	}
+}

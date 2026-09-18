@@ -31,3 +31,6 @@ Go utility packages for concurrency, orchestration, resilience, and data handlin
 - Pipeline and workflow engines support snapshot persistence for resumability
 - `pipeline` snapshots are fail-stop: never continue after `ErrSnapshotFailed`
 - `pipeline.Repeat` and `pipeline.RetryAfter` are scheduler-neutral; do not add sleeps or scheduler/storage dependencies to the engine
+- Compact Repeat history must never discard compensation journals; validation recursively rejects nested compensators
+- Pipeline time is injectable with `WithClock`; keep timeout/retry tests deterministic
+- State migration and Observer hooks remain storage- and telemetry-vendor-neutral

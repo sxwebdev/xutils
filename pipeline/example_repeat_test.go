@@ -21,7 +21,7 @@ func ExampleRepeat() {
 				}),
 			}, func(_ context.Context, _ pipeline.DataAccessor, iteration int) (bool, time.Duration, error) {
 				return iteration == 2, 0, nil
-			}),
+			}, pipeline.WithRepeatHistory(pipeline.RepeatHistoryCompact)),
 		},
 	}
 

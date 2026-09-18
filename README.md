@@ -26,7 +26,7 @@ go get github.com/sxwebdev/xutils
 | `syncutil`   | Thread-safe generic containers: `Map`, `Slice`, and `Locker` (mutex-wrapped value)                                              |
 | `testutil`   | Test helpers: pretty-print any value as indented JSON                                                                           |
 | `timeutil`   | Function execution time measurement                                                                                             |
-| `pipeline`   | Declarative resumable workflow engine with action/poll/branch/repeat steps, saga compensation and fail-stop snapshots          |
+| `pipeline`   | Resumable action/poll/branch/repeat engine with compact history, migrations, observer events and fail-stop snapshots           |
 | `workflow`   | Stage-based workflow engine with steps, retry policies and lifecycle hooks                                                      |
 
 ## AI Agent Skills
@@ -47,7 +47,7 @@ skills add sxwebdev/xutils
 ├── dbutil/        # Database helpers: pagination, JSON column, duration column, tx wrapper
 ├── loggerutil/    # Minimal logger interface with no-op and test implementations
 ├── loopper/       # Periodic task runner with context timeout and panic recovery
-├── pipeline/      # Declarative resumable workflow engine (action/poll/branch/repeat, saga, snapshots)
+├── pipeline/      # Resumable workflow engine (compact Repeat, migrations, observer, saga, snapshots)
 ├── randutil/      # Cryptographically secure random string and number generation
 ├── retry/         # Retry mechanism with linear, backoff and infinite policies
 ├── strutil/       # String helpers: UTF-8 cleanup, number and duration formatting

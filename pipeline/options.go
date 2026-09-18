@@ -50,3 +50,27 @@ func WithCASSnapshotFn(fn CASSnapshotFunc) ExecutorOption {
 		e.snapshotFn = nil
 	}
 }
+
+// WithClock sets the clock used for timestamps, timeout checks, and internal
+// retry waits. A nil Clock is ignored and the standard time clock is used.
+func WithClock(clock Clock) ExecutorOption {
+	return func(e *Executor) {
+		if clock != nil {
+			e.clock = clock
+		}
+	}
+}
+
+// WithStateMigrator configures an atomic from-version-to-current migration.
+func WithStateMigrator(migrator StateMigrator) ExecutorOption {
+	return func(e *Executor) {
+		e.stateMigrator = migrator
+	}
+}
+
+// WithObserver registers a synchronous lifecycle observer.
+func WithObserver(observer Observer) ExecutorOption {
+	return func(e *Executor) {
+		e.observer = observer
+	}
+}

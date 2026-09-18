@@ -80,7 +80,23 @@ type RepeatStep struct {
 	Until RepeatFunc
 	// MaxIterations is an optional safety limit. Zero means unlimited.
 	MaxIterations int
+	// MaxDuration limits the total wall-clock duration across restarts. Zero
+	// means unlimited.
+	MaxDuration time.Duration
+	// History controls whether completed iteration details are retained.
+	History RepeatHistory
 }
+
+// RepeatHistory controls persistence of completed Repeat iterations.
+type RepeatHistory uint8
+
+const (
+	// RepeatHistoryFull retains every completed child path and is the default.
+	RepeatHistoryFull RepeatHistory = iota
+	// RepeatHistoryCompact removes completed child journals and aggregates their
+	// diagnostics after each successful iteration.
+	RepeatHistoryCompact
+)
 
 // ActionFunc is the signature for action step functions.
 type ActionFunc func(ctx context.Context, data DataAccessor) error
@@ -265,8 +281,17 @@ func validateSteps(steps []Step, parentPath []string) error {
 		}
 
 		// Validate poll.
-		if step.Poll != nil && step.Poll.Check == nil {
-			return fmt.Errorf("pipeline: poll step %q has nil Check function", step.Name)
+		if step.Poll != nil {
+			if step.Poll.Check == nil {
+				return fmt.Errorf("pipeline: poll step %q has nil Check function", step.Name)
+			}
+			if step.Poll.MaxDuration < 0 {
+				return fmt.Errorf("pipeline: poll step %q max duration must be >= 0", step.Name)
+			}
+		}
+
+		if step.Retry != nil && step.Retry.InitialDelay < 0 {
+			return fmt.Errorf("pipeline: step %q retry delay must be >= 0", step.Name)
 		}
 
 		// Validate branch.
@@ -293,6 +318,20 @@ func validateSteps(steps []Step, parentPath []string) error {
 			if step.Repeat.MaxIterations < 0 {
 				return fmt.Errorf("pipeline: repeat step %q max iterations must be >= 0", step.Name)
 			}
+			if step.Repeat.MaxDuration < 0 {
+				return fmt.Errorf("pipeline: repeat step %q max duration must be >= 0", step.Name)
+			}
+			if step.Repeat.History > RepeatHistoryCompact {
+				return fmt.Errorf("pipeline: repeat step %q has invalid history mode %d", step.Name, step.Repeat.History)
+			}
+			if step.Repeat.History == RepeatHistoryCompact {
+				if compensatorPath := findCompensatorPath(step.Repeat.Steps, nil); compensatorPath != nil {
+					return &ErrCompactRepeatCompensation{
+						StepName:        step.Name,
+						CompensatorPath: append(append([]string{}, parentPath...), append([]string{step.Name, "<iteration>"}, compensatorPath...)...),
+					}
+				}
+			}
 			childPath := append(append([]string{}, parentPath...), step.Name, "<iteration>")
 			if err := validateSteps(step.Repeat.Steps, childPath); err != nil {
 				return err
@@ -300,5 +339,28 @@ func validateSteps(steps []Step, parentPath []string) error {
 		}
 	}
 
+	return nil
+}
+
+func findCompensatorPath(steps []Step, parentPath []string) []string {
+	for i := range steps {
+		step := &steps[i]
+		stepPath := append(append([]string{}, parentPath...), step.Name)
+		if step.Action != nil && step.Action.Compensate != nil {
+			return stepPath
+		}
+		if step.Branch != nil {
+			for pathName, pathSteps := range step.Branch.Paths {
+				if path := findCompensatorPath(pathSteps, append(stepPath, pathName)); path != nil {
+					return path
+				}
+			}
+		}
+		if step.Repeat != nil {
+			if path := findCompensatorPath(step.Repeat.Steps, append(stepPath, "<iteration>")); path != nil {
+				return path
+			}
+		}
+	}
 	return nil
 }

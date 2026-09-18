@@ -46,12 +46,15 @@ p := &pipeline.Pipeline{
         }),
 
         pipeline.Repeat("batches", []pipeline.Step{
-            pipeline.Action("process_batch", processBatch,
-                pipeline.WithCompensate(undoBatch)),
+            pipeline.Action("process_batch", processBatch),
         }, func(ctx context.Context, data pipeline.DataAccessor, iteration int) (bool, time.Duration, error) {
             done, err := allBatchesProcessed(ctx, iteration)
             return done, 5 * time.Second, err
-        }, pipeline.WithMaxIterations(1_000)),
+        },
+            pipeline.WithMaxIterations(1_000),
+            pipeline.WithMaxRepeatDuration(24*time.Hour),
+            pipeline.WithRepeatHistory(pipeline.RepeatHistoryCompact),
+        ),
 
         pipeline.Action("notify", notifyFn),
     },
@@ -105,11 +108,23 @@ condition afterward. If the condition returns `done=false`, the executor
 snapshots and yields with `*ErrRetryAfter`. It yields even for duration zero, so
 an unlimited repeat cannot spin synchronously. `CurrentPath` includes repeat
 iteration segments; completed children are not re-run after restart. Nested
-branches and repeats are supported, and compensation walks completed actions
-from every iteration in reverse order.
+branches and repeats are supported.
 
 Use `WithMaxIterations` when a business limit exists. The default zero is
 unlimited but still scheduler-yielding.
+
+`RepeatHistoryFull` is the default and retains per-iteration completion and
+compensation journals. `RepeatHistoryCompact` removes each successful
+iteration's child completions and aggregates diagnostics without the outer
+iteration number; the current incomplete iteration remains exact. Compact mode
+recursively rejects compensators inside nested Branch/Repeat. Put an aggregating
+compensatable Action before the Repeat when rollback is needed, and bump the
+pipeline version when switching an existing definition between history modes.
+
+`WithMaxRepeatDuration` persists its start timestamp across delays and restarts.
+The limit is checked before starting/resuming an iteration and before `Until`;
+timeout follows normal compensation and remains discoverable as
+`*ErrRepeatTimeout`.
 
 ### Scheduler-neutral delayed continuation
 
@@ -126,6 +141,11 @@ signal with `errors.AsType` and the cause with `errors.Is`/`errors.AsType`. Keep
 external scheduler should own the delay. `ErrSnooze` remains compatible for
 existing Poll callbacks, and `NoCompensate` remains compatible for caller-owned
 retry policies.
+
+Negative dynamic delays are normalized to zero consistently in returned typed
+errors and `StepDiagnostics.NextRunAt`. Zero still yields to the external
+scheduler. Negative static retry/Poll/Repeat durations fail validation;
+`WithRetry(..., 0, ...)` keeps the historical one-second default.
 
 ### Snapshot contract
 
@@ -152,6 +172,16 @@ resume; new fields are optional and old JSON remains readable.
 applications still need single-owner execution (for example a storage lease or
 single-consumer queue) and idempotency keys for external effects.
 
+`WithClock` controls diagnostic timestamps, next-run hints, Poll/Repeat timeout
+checks, and cancellable `WithRetry` sleeps. Use a fake implementation of
+`Clock.Now` and `Clock.Sleep` instead of real sleeps in tests.
+
+`WithObserver` delivers ordered synchronous lifecycle `Event` values without a
+mutable RunState pointer. Observer panics are recovered and logged; observers
+must enqueue their own slow I/O. Events are vendor-neutral and cover steps,
+Repeat iterations, delays, compensation, snapshots, migrations, version
+mismatches, and cancellation.
+
 ### Error handling
 
 ```go
@@ -166,6 +196,9 @@ return pipeline.NoCompensate(err)
 // pipeline.ErrCompensationFailed — compensation action failed
 // pipeline.ErrPollTimeout        — poll exceeded MaxDuration
 // pipeline.ErrRepeatLimit        — repeat exceeded WithMaxIterations
+// pipeline.ErrRepeatTimeout      — repeat exceeded WithMaxRepeatDuration
+// pipeline.ErrCompactRepeatCompensation — compact repeat contains a compensator
+// pipeline.ErrStateMigrationFailed — state migration callback failed
 // pipeline.ErrVersionMismatch    — state version incompatible with pipeline
 //
 // Sentinel (match with errors.Is):
@@ -183,6 +216,13 @@ p := &pipeline.Pipeline{
     Steps:            steps,
 }
 ```
+
+Use `WithStateMigrator` for one atomic `from → current` transformation before
+ordinary compatibility checks and callbacks. The executor stamps and snapshots
+the migrated state fail-stop before continuing. The migrator may update Data,
+paths, completions, Repeat state, and diagnostics. Downgrades are rejected;
+terminal input states are returned unchanged. Without a migrator, existing
+`MinResumeVersion`/`ErrVersionMismatch` behavior is unchanged.
 
 ---
 

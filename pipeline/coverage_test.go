@@ -243,17 +243,14 @@ func TestRetryContextCancelledDuringWait(t *testing.T) {
 		},
 	}
 
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	exec := newTestExecutor(t, nil)
+	exec := NewExecutor(
+		WithLogger(&testLogger{t: t}),
+		WithDebug(true),
+		WithClock(cancelingClock{now: time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC), cancel: cancel}),
+	)
 	state, err := exec.Run(ctx, p, RunState{})
 
-	// Cancellation must abort the retry wait promptly...
-	assert.Less(t, time.Since(start), 5*time.Second, "cancellation must abort the retry wait")
+	// Cancellation must abort the retry wait without another attempt.
 	assert.Equal(t, 1, attempts, "only the first attempt runs before cancellation interrupts the wait")
 	// ...and return cleanly without rolling back — the run stays resumable, not
 	// terminally failed (bug: a cancel mid-retry used to trigger compensation).

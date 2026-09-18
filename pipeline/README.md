@@ -9,6 +9,10 @@ Declarative pipeline engine with persistence, compensation, and typed steps.
 - **Compensation (Saga)** — automatic rollback of completed steps on failure
 - **Typed steps** — Action, Poll, Branch, and resumable Repeat
 - **Scheduler-neutral waits** — callbacks can return `RetryAfter` without blocking a goroutine
+- **Bounded Repeat history** — optional compact history for long-running loops
+- **Version migrations** — optional fail-stop transformation of persisted state and data
+- **Clock injection** — deterministic timeout and retry behavior without external dependencies
+- **Observer events** — vendor-neutral lifecycle events for metrics and tracing adapters
 - **Diagnostics** — aggregate attempts, timestamps, errors, and next-run hints per stable step path
 - **Declarative** — entire flow visible in one place
 
@@ -97,20 +101,49 @@ steps and returns the same `(done, retryAfter, error)` shape as `Poll`:
 
 ```go
 pipeline.Repeat("pages", []pipeline.Step{
-    pipeline.Action("fetch", fetchPage,
-        pipeline.WithCompensate(removeFetchedPage)),
-    pipeline.Branch("classify", classifyPage, pagePaths),
+		pipeline.Action("fetch", fetchPage),
+		pipeline.Branch("classify", classifyPage, pagePaths),
 }, func(ctx context.Context, data pipeline.DataAccessor, iteration int) (bool, time.Duration, error) {
-    done, err := noMorePages(ctx, iteration)
-    return done, 5 * time.Second, err
-}, pipeline.WithMaxIterations(1_000))
+		done, err := noMorePages(ctx, iteration)
+		return done, 5 * time.Second, err
+},
+		pipeline.WithMaxIterations(1_000),
+		pipeline.WithMaxRepeatDuration(24*time.Hour),
+		pipeline.WithRepeatHistory(pipeline.RepeatHistoryCompact),
+)
 ```
 
 When `done` is false, the executor snapshots the next iteration and returns
 `*ErrRetryAfter`. It yields even when `retryAfter == 0`, so an unlimited repeat
-cannot spin synchronously. `CurrentPath` includes the iteration number, nested
-branches/repeats resume at the exact child step, and compensation walks actions
-from every iteration in reverse completion order.
+cannot spin synchronously. `CurrentPath` includes the iteration number and
+nested branches/repeats resume at the exact child step.
+
+Repeat history has two explicit modes:
+
+- `RepeatHistoryFull` is the default and preserves the existing behavior:
+  completed children and per-iteration diagnostics are retained, and
+  compensation walks actions from every iteration in reverse completion order.
+- `RepeatHistoryCompact` removes completed child journals after a successful
+  `Until` call and merges diagnostics into paths without the outer iteration
+  number. The current incomplete iteration remains exact and fully resumable.
+  Attempts are summed; first/last starts, latest completion, last error, and the
+  current next-run hint are retained. A compacting snapshot is fail-stop, so the
+  next iteration cannot begin until compact state is durable.
+
+Compact Repeat recursively rejects any nested `Action` with `WithCompensate`,
+including actions inside Branch or nested Repeat. When rollback is required,
+place one aggregating compensatable Action before the Repeat and store aggregate
+rollback data in `Data`. Changing an existing Repeat between Full and Compact
+changes the persisted-state contract and therefore requires a new pipeline
+version (and, for active runs, an explicit state migration).
+
+`WithMaxRepeatDuration` starts its durable timer when the Repeat is first
+entered. The executor checks the limit before starting or resuming each
+iteration and again after its children, immediately before `Until`. Equality is
+timed out (`elapsed >= max`). Scheduler delays, `RetryAfter`, callback failures,
+and restarts do not reset the timer. Successful Repeat completion clears
+`RepeatState.StartedAt`; timeout follows normal compensation and is returned as
+`*ErrRepeatTimeout`.
 
 ## Persistence & Resume
 
@@ -132,6 +165,9 @@ if err == nil {
 } else if snapshotErr, ok := errors.AsType[*pipeline.ErrSnapshotFailed](err); ok {
     // Stop. Reload the last durable state before retrying.
     log.Printf("snapshot failed during %s: %v", snapshotErr.Operation, snapshotErr)
+} else if repeatTimeout, ok := errors.AsType[*pipeline.ErrRepeatTimeout](err); ok {
+    // Ordinary compensation has completed; state is failed.
+    log.Printf("repeat %s exceeded %s", repeatTimeout.StepName, repeatTimeout.MaxDuration)
 } else {
     // Engine error.
 }
@@ -243,12 +279,36 @@ with `errors.Is`/`errors.AsType`. This is distinct from `WithRetry`, whose bound
 short retries happen within the current invocation, and from a permanent error,
 which starts compensation. `ErrSnooze` remains supported for existing Poll code.
 
+Dynamic negative delays from `RetryAfter`, Poll `done=false`, and Repeat
+`done=false` are normalized to zero before either the typed scheduling error or
+`StepDiagnostics.NextRunAt` leaves the executor. Zero still returns control to
+the external scheduler; Repeat never starts another iteration synchronously.
+Negative static retry, Poll timeout, and Repeat timeout durations fail pipeline
+validation. `WithRetry(..., 0, ...)` retains its historical one-second default.
+
 ## Diagnostics
 
 `RunState.StepDiagnostics` is keyed by `StepPathKey(fullPath)` and stores only
 aggregate metadata: attempt count, first/last start, completion, last error, and
-next scheduled run. Repeat iteration numbers are part of child paths. The
-metadata is observational and is never used to make execution decisions.
+next scheduled run. Repeat iteration numbers are part of child paths in Full
+mode. Compact mode aggregates completed children without the outer iteration
+number. The metadata is observational and never drives execution decisions.
+
+## Clock
+
+`WithClock` replaces all executor reads and internal waits with a minimal clock:
+
+```go
+type Clock interface {
+    Now() time.Time
+    Sleep(ctx context.Context, duration time.Duration) error
+}
+```
+
+It controls diagnostic timestamps, `NextRunAt`, Poll and Repeat duration
+limits, and cancellable `WithRetry` waits. The default uses standard `time`. A
+fake clock can advance deterministically in tests; `Sleep` implementations must
+return `ctx.Err()` on cancellation.
 
 ## Concurrent execution
 
@@ -321,7 +381,30 @@ When deploying a new app version with changed pipeline definitions:
 2. New instances reject old-version states with `ErrVersionMismatch` — return the job to the queue
 3. After all old pipelines complete, only new-version pipelines remain
 
-The library provides the mechanism; the application handles the policy (retry, drain, migrate).
+Without a migrator, the existing exact/range compatibility behavior remains
+unchanged. `WithStateMigrator` enables one atomic `from → current` conversion:
+
+```go
+executor := pipeline.NewExecutor(pipeline.WithStateMigrator(
+    func(ctx context.Context, name string, from, to int, state pipeline.RunState) (pipeline.RunState, error) {
+        state.CurrentPath = renamePath(state.CurrentPath, "charge", "capture_payment")
+        state.Data["payment"] = migratePaymentJSON(state.Data["payment"])
+        return state, nil
+    },
+))
+```
+
+Migration runs before ordinary compatibility checks and before every pipeline
+callback. The executor stamps the target version and snapshots the result
+fail-stop before continuing. Errors are returned as
+`*ErrStateMigrationFailed`; snapshot errors remain `*ErrSnapshotFailed`.
+Downgrades are rejected, while input terminal states are returned unchanged and
+never migrated or resumed. The migrator may update `Data`, paths, completed
+steps, Repeat state, diagnostics, and other compatible fields. Multi-hop schema
+changes are the application's responsibility inside this single atomic call.
+
+The library provides the mechanism; the application still chooses whether to
+migrate, drain, or retain old definitions.
 
 ### Stuck pipelines
 
@@ -356,6 +439,21 @@ saveState(state)
 
 **Compensation-only definitions** — keep old pipeline structure with only `Compensate` functions to safely rollback stuck pipelines before discarding them.
 
+## Observer
+
+`WithObserver` registers a vendor-neutral synchronous `Observer`. Events cover
+pipeline and step lifecycle, delayed continuation, Repeat iterations,
+compensation, snapshots, migrations, version mismatches, and cancellation. Each
+event contains pipeline identity/version, current status, a cloned full step
+path, attempt/iteration where applicable, duration, operation, and cause. No
+mutable `RunState` pointer is exposed.
+
+Observer callbacks never affect control flow: panics are recovered and reported
+through the existing logger. Callbacks run synchronously and in event order;
+observers doing network or disk I/O should enqueue work to their own bounded
+asynchronous worker. When no observer is configured, no background machinery is
+created.
+
 ## Validation
 
 The executor validates the pipeline definition on each `Run`:
@@ -365,3 +463,5 @@ The executor validates the pipeline definition on each `Run`:
 - Action/Poll must have non-nil functions
 - Branch must have a Decide function and at least one path
 - Repeat must have an Until function and a non-negative iteration limit
+- Static retry/Poll/Repeat durations must be non-negative
+- Compact Repeat must not contain a compensator at any recursive depth

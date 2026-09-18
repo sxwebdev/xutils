@@ -85,6 +85,20 @@
 //		return iteration == 9, time.Second, nil
 //	}, pipeline.WithMaxIterations(100))
 //
+// [RepeatHistoryFull] is the default and retains every completed child for
+// compensation. [RepeatHistoryCompact] removes a successful iteration's child
+// journal and aggregates its diagnostics without the outer iteration number.
+// The active incomplete iteration remains fully resumable, and the compacting
+// snapshot is fail-stop. Compact Repeat recursively rejects nested compensators;
+// use one aggregating compensatable Action before the Repeat when rollback is
+// required. Switching modes changes persisted semantics and requires a new
+// pipeline version.
+//
+// [WithMaxRepeatDuration] persists the Repeat start time across delayed
+// continuations and restarts. The limit is checked before an iteration and
+// again before Until; elapsed time equal to the limit returns
+// [ErrRepeatTimeout] after normal compensation.
+//
 // # Data Passing
 //
 // Steps communicate through a [DataAccessor], available as the second argument
@@ -210,6 +224,13 @@
 // This is useful during rolling deployments: old instances drain active pipelines
 // while new instances reject incompatible states and return jobs to the queue.
 //
+// [WithStateMigrator] optionally performs one atomic migration from the saved
+// version to the current version before compatibility checks or callbacks. The
+// returned state is stamped with the current version and snapshotted fail-stop
+// before execution. Migration may update Data and all path-based journals;
+// failures return [ErrStateMigrationFailed]. Downgrades are rejected and input
+// terminal states are never migrated or resumed.
+//
 // If old instances are gone and old-version pipelines are stuck, use
 // [RunState.ForceTerminate] to mark them as failed without compensation,
 // or maintain a registry of old pipeline definitions to drain them gracefully.
@@ -221,9 +242,12 @@
 //   - [ErrSnapshotFailed] — persistence failed; execution stopped immediately
 //   - [ErrStepFailed] — step execution failed; contains StepName, Path, and underlying Err
 //   - [ErrPollTimeout] — poll step exceeded its [WithMaxPollDuration] limit
+//   - [ErrRepeatTimeout] — Repeat exceeded its [WithMaxRepeatDuration] limit
+//   - [ErrCompactRepeatCompensation] — compact Repeat contains a nested compensator
 //   - [ErrCompensationFailed] — compensation failed; contains Original and Compensation errors
 //   - [ErrNoCompensate] — sentinel used by [NoCompensate] to skip compensation
 //   - [ErrVersionMismatch] — state version incompatible with pipeline definition version
+//   - [ErrStateMigrationFailed] — state migration callback failed
 //
 // # Retry
 //
@@ -241,6 +265,24 @@
 // its cause is available through errors.Is/errors.AsType. [ErrSnooze] remains
 // supported for Poll compatibility.
 //
+// Dynamic negative delays are normalized to zero in both the returned typed
+// scheduling error and StepDiagnostics.NextRunAt. Zero always yields to the
+// external scheduler for Repeat. Negative static duration options fail
+// validation; a zero WithRetry delay retains the historical one-second default.
+//
+// # Clock and Observability
+//
+// [WithClock] supplies the [Clock] used for diagnostic timestamps, next-run
+// hints, Poll and Repeat duration checks, and cancellable WithRetry waits. The
+// default Clock uses the standard time package.
+//
+// [WithObserver] registers a synchronous vendor-neutral [Observer]. [Event]
+// values cover pipeline, step, delay, Repeat iteration, compensation, snapshot,
+// migration, version mismatch, and cancellation lifecycle changes. No mutable
+// RunState pointer is exposed. Observer panics are recovered and logged; slow
+// observers should enqueue work asynchronously because delivery is ordered and
+// synchronous.
+//
 // # Step Options
 //
 //   - [WithCompensate] — attach a rollback function to an action step
@@ -248,6 +290,8 @@
 //   - [WithRetry] — automatic retry with configurable attempts, delay, and backoff
 //   - [WithMaxPollDuration] — maximum total time a poll step can run before timing out
 //   - [WithMaxIterations] — optional safety limit for a Repeat step
+//   - [WithMaxRepeatDuration] — durable total duration limit for a Repeat step
+//   - [WithRepeatHistory] — select Full or Compact completed-iteration history
 //
 // # Executor Options
 //
@@ -255,6 +299,9 @@
 //   - [WithDebug] — enable verbose debug logging
 //   - [WithSnapshotFn] — register a persistence callback for state snapshots
 //   - [WithCASSnapshotFn] — register a revision-aware compare-and-swap callback
+//   - [WithClock] — inject time reads and cancellable retry waits
+//   - [WithStateMigrator] — migrate non-terminal state to the current version
+//   - [WithObserver] — receive synchronous lifecycle events
 //
 // # Concurrency
 //
